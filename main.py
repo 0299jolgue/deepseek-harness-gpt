@@ -23,6 +23,8 @@ WORKSPACE = ROOT / "workspace"
 TEMPLATES = ROOT / "templates"
 HOST = "0.0.0.0"
 PORT = 80
+DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_MODEL = "deepseek-ai/deepseek-v4-flash-0731"
 SHELL_ENABLED = os.getenv("ENABLE_SHELL", "1").lower() not in {"0", "false", "no"}
 SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "0"))
 SESSION_TTL = int(os.getenv("SESSION_TTL", "86400"))
@@ -38,8 +40,8 @@ SESSIONS_LOCK = threading.Lock()
 def defaults():
     return {
         "provider": {
-            "base_url": "https://integrate.api.nvidia.com/v1",
-            "model": "deepseek-ai/deepseek-v4-flash-0731",
+            "base_url": DEFAULT_BASE_URL,
+            "model": DEFAULT_MODEL,
             "api_key": os.getenv("NVIDIA_API_KEY", ""),
         },
         "search": {
@@ -57,11 +59,25 @@ def load():
         try:
             current = json.loads(DATA.read_text(encoding="utf-8"))
             if isinstance(current, dict):
-                d.update(current)
+                for key, value in current.items():
+                    if key == "provider" and isinstance(value, dict):
+                        merged = dict(d["provider"])
+                        merged.update({k: v for k, v in value.items() if v not in (None, "")})
+                        d["provider"] = merged
+                    elif key == "search" and isinstance(value, dict):
+                        merged = dict(d["search"])
+                        merged.update({k: v for k, v in value.items() if v not in (None, "")})
+                        d["search"] = merged
+                    else:
+                        d[key] = value
         except Exception:
             pass
     else:
-        DATA.write_text(json.dumps(d, indent=2), encoding="utf-8")
+        DATA.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+    if not d.get("provider", {}).get("base_url"):
+        d["provider"]["base_url"] = DEFAULT_BASE_URL
+    if not d.get("provider", {}).get("model"):
+        d["provider"]["model"] = DEFAULT_MODEL
     return d
 
 
@@ -126,14 +142,21 @@ def safe_path(name):
 
 def list_files():
     WORKSPACE.mkdir(exist_ok=True)
-    return [{"path": str(p.relative_to(WORKSPACE)), "size": p.stat().st_size} for p in sorted(WORKSPACE.rglob("*")) if p.is_file()]
+    result = []
+    for p in sorted(WORKSPACE.rglob("*")):
+        if p.is_file():
+            try:
+                result.append({"path": str(p.relative_to(WORKSPACE)), "size": p.stat().st_size})
+            except OSError:
+                pass
+    return result
 
 
 def file_tool(name, args):
     if name in ("create_file", "write_file"):
         p = safe_path(args.get("path"))
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(args.get("content", ""), encoding="utf-8")
+        p.write_text(str(args.get("content", "")), encoding="utf-8")
         return {"ok": True, "path": str(p.relative_to(WORKSPACE))}
     if name == "read_file":
         p = safe_path(args.get("path"))
@@ -173,15 +196,19 @@ def file_tool(name, args):
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
             if src.is_file():
                 z.write(src, src.name)
-            else:
+            elif src.exists():
                 for p in src.rglob("*"):
                     if p.is_file() and p != dest:
                         z.write(p, p.relative_to(src))
+            else:
+                raise ValueError("Source not found")
         rel = str(dest.relative_to(WORKSPACE))
         return {"ok": True, "path": rel, "download_url": "/download?path=" + urllib.parse.quote(rel)}
     if name == "unzip_files":
         src = safe_path(args.get("archive"))
         dest = safe_path(args.get("output", "unzipped"))
+        if not src.is_file():
+            raise ValueError("Archive not found")
         dest.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(src) as z:
             for member in z.infolist():
@@ -210,7 +237,13 @@ def shell_tool(args):
     if SHELL_TIMEOUT > 0:
         kwargs["timeout"] = SHELL_TIMEOUT
     proc = subprocess.run(argv, **kwargs)
-    return {"ok": proc.returncode == 0, "command": display_command, "exit_code": proc.returncode, "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
+    return {
+        "ok": proc.returncode == 0,
+        "command": display_command,
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout[-12000:],
+        "stderr": proc.stderr[-12000:],
+    }
 
 
 def search_web(query, provider="duckduckgo", api_key=""):
@@ -223,18 +256,18 @@ def search_web(query, provider="duckduckgo", api_key=""):
         req = urllib.request.Request(url, headers={"Accept": "application/json", "X-Subscription-Token": api_key})
         with urllib.request.urlopen(req) as r:
             data = json.loads(r.read())
-        return [{"title": item.get("title", ""), "url": item.get("url", ""), "snippet": item.get("description", "")} for item in data.get("web", {}).get("results", [])[:8]]
+        return [{"title": i.get("title", ""), "url": i.get("url", ""), "snippet": i.get("description", "")} for i in data.get("web", {}).get("results", [])[:8]]
     url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-    req = urllib.request.Request(url, headers={"User-Agent": "JolgueAI/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "JolgueAI/2.0"})
     with urllib.request.urlopen(req) as r:
         page = r.read().decode("utf-8", errors="ignore")
-    blocks = re.findall(r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.I | re.S)
-    snippets = re.findall(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', page, re.I | re.S)
+    blocks = re.findall(r'<a[^>]+class=["\']result__a["\'][^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', page, re.I | re.S)
+    snippets = re.findall(r'<a[^>]+class=["\']result__snippet["\'][^>]*>(.*?)</a>', page, re.I | re.S)
     results = []
     for i, (url0, title0) in enumerate(blocks[:8]):
-        title0 = html.unescape(re.sub(r"\s+", " ", re.sub(r"<.*?>", "", title0))).strip()
+        clean_title = html.unescape(re.sub(r"\s+", " ", re.sub(r"<.*?>", "", title0))).strip()
         snippet = html.unescape(re.sub(r"\s+", " ", re.sub(r"<.*?>", " ", snippets[i]))).strip() if i < len(snippets) else ""
-        results.append({"title": title0, "url": html.unescape(url0), "snippet": snippet})
+        results.append({"title": clean_title, "url": html.unescape(url0), "snippet": snippet})
     return results
 
 
@@ -252,83 +285,83 @@ def set_job(job_id, **updates):
             job["updated"] = time.time()
 
 
-def call_llm(payload, job_id):
+def llm_request(payload, job_id):
     p = payload.get("provider") or {}
-    base = (p.get("base_url") or "").rstrip("/")
+    base = (p.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+    model = p.get("model") or DEFAULT_MODEL
     key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", "")
-    model = p.get("model") or "deepseek-ai/deepseek-v4-flash-0731"
-    if not base or not key:
-        raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
-    search_cfg = payload.get("search") or {}
-    system = '''You are Jolgue AI, an autonomous conversational and coding agent with a real workspace.
+    if not key:
+        raise RuntimeError("NVIDIA_API_KEY is not configured. Add it to the server environment or Provider settings.")
+    system = """You are Jolgue AI, an autonomous coding and research agent with a real workspace.
 
-You have actual tools, and you should decide yourself when to use them. Do not merely describe what you would do when a tool can do it.
-- Use shell when you need to inspect, run, debug, install, build, test, transform, or otherwise operate on files/programs in the workspace.
-- Use web_search when the user asks for current/external information, a lookup, documentation, prices, news, compatibility, or facts that may have changed.
-- Use file tools when you need to create, edit, read, move, copy, delete, zip, or unzip workspace files.
-- You may chain as many tool calls as necessary until the task is actually complete.
-- Long-running work is allowed. Do not stop just because a tool or build takes a long time.
-- After each tool call, inspect its result and continue working when another tool call is needed.
-- Do not ask the user to run a command that you can run yourself with shell.
-- Do not claim a command, search, file operation, or test happened unless the tool result confirms it.
+Actually use tools instead of merely explaining them. Continue until the user's task is completed.
 
-Available tools:
-- create_file(path,content)
-- write_file(path,content)
-- read_file(path)
-- delete_file(path)
-- create_directory(path)
-- move_file(source,destination)
-- copy_file(source,destination)
-- zip_files(source,output) — creates a downloadable archive.
-- unzip_files(archive,output)
-- shell(command) — runs with the workspace as cwd and has no default timeout.
-- web_search(query) — searches the public web and has no client-side timeout.
+Available tool names:
+create_file, write_file, read_file, delete_file, create_directory, move_file, copy_file, zip_files, unzip_files, shell, web_search
 
-When using a tool, emit exactly one line per tool call in this format:
-<tool>{"name":"TOOL_NAME","args":{...}}</tool>
+For every tool action emit exactly:
+<tool>{\"name\":\"TOOL_NAME\",\"args\":{...}}</tool>
 
-Use only workspace-relative file paths. Tool markup is for execution and must not be used as normal prose. After all needed tools finish, answer the user normally and summarize the actual work/results.'''
-    for s in payload.get("skills", []):
-        system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
-    body = json.dumps({"model": model, "messages": [{"role": "system", "content": system}] + payload.get("messages", []), "temperature": 0.2, "stream": False}).encode("utf-8")
-    req = urllib.request.Request(base + "/chat/completions", data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + key}, method="POST")
-    set_job(job_id, phase="provider", response_open=False)
+Rules:
+- Use workspace-relative paths only.
+- Use shell for running programs, inspecting the environment, builds and tests.
+- Use file tools for creating/editing/reading/moving/copying/deleting/zipping files.
+- Use web_search for current or external information.
+- Inspect tool results and continue with more tools when necessary.
+- Do not claim an operation happened unless its tool result confirms it.
+- zip_files creates a downloadable archive; mention that the UI will provide a download button after the tool completes.
+"""
+    for skill in payload.get("skills", []):
+        if isinstance(skill, dict):
+            system += "\nSkill: " + str(skill.get("name", "unnamed")) + "\n" + str(skill.get("instructions", ""))
+    messages = [{"role": "system", "content": system}] + list(payload.get("messages", []))
+    body = json.dumps({"model": model, "messages": messages, "temperature": 0.2, "stream": False}).encode("utf-8")
+    req = urllib.request.Request(
+        base + "/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+        method="POST",
+    )
+    set_job(job_id, phase="provider")
     with urllib.request.urlopen(req) as response:
-        set_job(job_id, phase="provider", response_open=True)
-        if job_cancelled(job_id):
-            response.close()
-            raise RuntimeError("Generation stopped")
         raw = response.read()
-    set_job(job_id, response_open=False)
     if job_cancelled(job_id):
         raise RuntimeError("Generation stopped")
-    data = json.loads(raw)
-    return data["choices"][0]["message"]["content"]
+    data = json.loads(raw.decode("utf-8"))
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Provider returned an unexpected response: " + json.dumps(data, ensure_ascii=False)[:4000])
 
 
-def run_tools(text, search_cfg):
+def execute_tool_calls(text, search_cfg):
     results = []
-    for raw in re.findall(r'<tool>\s*(\{.*?\})\s*</tool>', text, re.S):
+    pattern = re.compile(r"<tool>\s*(\{.*?\})\s*</tool>", re.S)
+    for raw in pattern.findall(text):
         call = {}
         try:
             call = json.loads(raw)
-            name = call["name"]
-            args = call.get("args", {})
+            name = str(call["name"])
+            args = call.get("args") or {}
             if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}:
                 result = file_tool(name, args)
             elif name == "shell":
                 result = shell_tool(args)
             elif name == "web_search":
-                result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
+                result = {
+                    "ok": True,
+                    "query": args.get("query", ""),
+                    "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", "")),
+                }
             else:
-                raise ValueError(f"Unknown tool: {name}")
+                raise ValueError("Unknown tool: " + name)
             results.append({"tool": name, **result})
         except subprocess.TimeoutExpired:
             results.append({"tool": call.get("name", "unknown"), "ok": False, "error": "Command timed out"})
-        except Exception as e:
-            results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(e)})
-    return re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', text, flags=re.S).strip(), results
+        except Exception as exc:
+            results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(exc)})
+    clean = pattern.sub("", text).strip()
+    return clean, results
 
 
 def agent_run(payload, job_id):
@@ -339,28 +372,25 @@ def agent_run(payload, job_id):
     step = 0
     while True:
         if MAX_AGENT_STEPS > 0 and step >= MAX_AGENT_STEPS:
-            suffix = "\n\nI reached the configured maximum agent steps before finishing the task."
-            return (last_clean + suffix).strip(), all_tools, step
+            return (last_clean + "\n\nReached the configured maximum agent steps.").strip(), all_tools, step
         if job_cancelled(job_id):
             raise RuntimeError("Generation stopped")
         step += 1
         set_job(job_id, step=step, phase="thinking")
         turn = dict(payload)
         turn["messages"] = messages
-        content = call_llm(turn, job_id)
-        if job_cancelled(job_id):
-            raise RuntimeError("Generation stopped")
-        clean, tools = run_tools(content, search_cfg)
+        content = llm_request(turn, job_id)
+        clean, tools = execute_tool_calls(content, search_cfg)
         last_clean = clean
         if not tools:
             return clean, all_tools, step
         all_tools.extend(tools)
-        set_job(job_id, phase="tools", last_tools=tools)
+        set_job(job_id, phase="tools", last_tools=tools, tools=all_tools)
         messages.append({"role": "assistant", "content": content})
         tool_blob = json.dumps(tools, ensure_ascii=False)
         if len(tool_blob) > 36000:
             tool_blob = tool_blob[:36000] + "\n[tool output truncated]"
-        messages.append({"role": "user", "content": "Tool results from the previous step. Inspect these results and continue the task if more tool calls are needed.\n" + tool_blob})
+        messages.append({"role": "user", "content": "Tool results from the previous step. Inspect them and continue the task if needed.\n" + tool_blob})
 
 
 def cleanup_jobs():
@@ -373,65 +403,77 @@ def cleanup_jobs():
 
 def active_jobs_for(username):
     with JOBS_LOCK:
-        return [{"job_id": job_id, "status": job.get("status"), "phase": job.get("phase"), "step": job.get("step", 0), "created": job.get("created"), "updated": job.get("updated")} for job_id, job in JOBS.items() if job.get("username") == username and job.get("status") == "running"]
+        return [
+            {"job_id": jid, "status": j.get("status"), "phase": j.get("phase"), "step": j.get("step", 0), "created": j.get("created"), "updated": j.get("updated")}
+            for jid, j in JOBS.items()
+            if j.get("username") == username and j.get("status") == "running"
+        ]
 
 
 def job_public(job):
-    result = {"job_id": job["job_id"], "status": job.get("status"), "phase": job.get("phase"), "step": job.get("step", 0), "tools": job.get("tools", []), "files": list_files(), "updated": job.get("updated")}
+    out = {
+        "job_id": job["job_id"],
+        "status": job.get("status"),
+        "phase": job.get("phase"),
+        "step": job.get("step", 0),
+        "tools": job.get("tools", []),
+        "files": list_files(),
+        "updated": job.get("updated"),
+    }
     if job.get("status") == "completed":
-        result["content"] = job.get("content", "")
-        result["steps"] = job.get("steps", 0)
+        out["content"] = job.get("content", "")
+        out["steps"] = job.get("steps", 0)
     elif job.get("status") == "error":
-        result["error"] = job.get("error", "Unknown error")
+        out["error"] = job.get("error", "Unknown error")
     elif job.get("status") == "stopped":
-        result["content"] = job.get("content", "Generation stopped.")
-    return result
+        out["content"] = job.get("content", "Generation stopped.")
+    return out
 
 
 def run_job(job_id, payload):
     try:
         content, tools, steps = agent_run(payload, job_id)
-        set_job(job_id, status="completed", phase="done", content=content, tools=tools, steps=steps, response_open=False)
-    except RuntimeError as e:
-        if "stopped" in str(e).lower() or job_cancelled(job_id):
-            set_job(job_id, status="stopped", phase="stopped", content="Generation stopped.", error=str(e), response_open=False)
+        set_job(job_id, status="completed", phase="done", content=content, tools=tools, steps=steps)
+    except RuntimeError as exc:
+        if "stopped" in str(exc).lower() or job_cancelled(job_id):
+            set_job(job_id, status="stopped", phase="stopped", content="Generation stopped.", error=str(exc))
         else:
-            set_job(job_id, status="error", phase="error", error=str(e), response_open=False)
-    except urllib.error.HTTPError as e:
+            set_job(job_id, status="error", phase="error", error=str(exc))
+    except urllib.error.HTTPError as exc:
         try:
-            detail = e.read().decode(errors="ignore")
+            detail = exc.read().decode(errors="ignore")
         except Exception:
-            detail = str(e)
-        set_job(job_id, status="error", phase="error", error=f"Provider HTTP {e.code}: {detail}", response_open=False)
-    except Exception as e:
-        set_job(job_id, status="error", phase="error", error=str(e), response_open=False)
+            detail = str(exc)
+        set_job(job_id, status="error", phase="error", error=f"Provider HTTP {exc.code}: {detail}")
+    except Exception as exc:
+        set_job(job_id, status="error", phase="error", error=str(exc))
 
 
-LOGIN_HTML = '''<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI — Entrar</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#212121;color:#eee;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(380px,calc(100% - 32px));background:#171717;border:1px solid #3d3d3d;border-radius:18px;padding:28px;box-sizing:border-box}.logo{width:44px;height:44px;border-radius:12px;background:#fff;color:#111;display:grid;place-items:center;font-weight:800;margin-bottom:18px}.title{font-size:25px;font-weight:650;margin-bottom:6px}.sub{color:#aaa;margin-bottom:22px}.field{width:100%;box-sizing:border-box;padding:12px;border:1px solid #454545;border-radius:10px;background:#212121;color:#eee;margin:7px 0;outline:none}.field:focus{border-color:#777}.btn{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:#fff;color:#111;font-weight:700;cursor:pointer}.err{min-height:18px;color:#ff7777;margin-top:10px}.hint{margin-top:15px;color:#777;font-size:12px;line-height:1.4}</style></head><body><form class="card" method="post" action="/api/login"><div class="logo">J</div><div class="title">Jolgue AI</div><div class="sub">Inicia sessão no teu workspace privado.</div><input class="field" name="username" autocomplete="username" placeholder="Utilizador" required><input class="field" type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="btn">Entrar</button><div class="err">{{ERROR}}</div><div class="hint">O workspace, shell e definições do provider ficam protegidos por esta sessão.</div></form></body></html>'''
+LOGIN_HTML = '''<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI — Entrar</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#212121;color:#eee;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(380px,calc(100% - 32px));background:#171717;border:1px solid #3d3d3d;border-radius:18px;padding:28px;box-sizing:border-box}.logo{width:44px;height:44px;border-radius:12px;background:#fff;color:#111;display:grid;place-items:center;font-weight:800;margin-bottom:18px}.title{font-size:25px;font-weight:650;margin-bottom:6px}.sub{color:#aaa;margin-bottom:22px}.field{width:100%;box-sizing:border-box;padding:12px;border:1px solid #454545;border-radius:10px;background:#212121;color:#eee;margin:7px 0;outline:none}.field:focus{border-color:#777}.btn{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:#fff;color:#111;font-weight:700;cursor:pointer}.err{min-height:18px;color:#ff7777;margin-top:10px}.hint{margin-top:15px;color:#777;font-size:12px;line-height:1.4}</style></head><body><form class="card" method="post" action="/api/login"><div class="logo">J</div><div class="title">Jolgue AI</div><div class="sub">Inicia sessão no teu workspace privado.</div><input class="field" name="username" autocomplete="username" placeholder="Utilizador" required><input class="field" type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="btn">Entrar</button><div class="err">{{ERROR}}</div><div class="hint">Workspace, shell e provider protegidos por sessão.</div></form></body></html>'''
 
 
 class H(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200):
-        b = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
-            self.wfile.write(b)
+            self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
     def send_html(self, text, status=200):
-        b = text.encode("utf-8")
+        body = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
-            self.wfile.write(b)
+            self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -441,13 +483,12 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         cleanup_jobs()
         if self.path == "/health":
-            self.send_json({"ok": True, "service": "jolgue-ai"})
+            self.send_json({"ok": True, "service": "jolgue-ai", "port": PORT, "model": DEFAULT_MODEL})
             return
         if self.path == "/logout":
-            raw = self.headers.get("Cookie", "")
             c = SimpleCookie()
             try:
-                c.load(raw or "")
+                c.load(self.headers.get("Cookie", ""))
             except Exception:
                 pass
             token = c.get("jolgue_session")
@@ -470,35 +511,26 @@ class H(BaseHTTPRequestHandler):
                 if not p.is_file():
                     self.send_json({"error": "File not found"}, 404)
                     return
-                b = p.read_bytes()
+                data = p.read_bytes()
                 name = p.name.replace('"', "")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip" if p.suffix.lower() == ".zip" else "application/octet-stream")
                 self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 try:
-                    self.wfile.write(b)
+                    self.wfile.write(data)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
             return
         if self.path == "/":
             if not require_auth(self):
                 self.send_html(LOGIN_HTML.replace("{{ERROR}}", ""))
                 return
             p = TEMPLATES / "chat.html"
-            b = p.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(b)))
-            self.end_headers()
-            try:
-                self.wfile.write(b)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self.send_html(p.read_text(encoding="utf-8"))
             return
         if not require_auth(self):
             self.unauthorized()
@@ -510,34 +542,40 @@ class H(BaseHTTPRequestHandler):
             self.send_json({"files": list_files()})
             return
         if self.path == "/api/jobs/active":
-            username = session_user(self)
-            self.send_json({"jobs": active_jobs_for(username)})
+            self.send_json({"jobs": active_jobs_for(session_user(self))})
+            return
+        if self.path.startswith("/api/jobs/"):
+            job_id = urllib.parse.unquote(self.path.split("/", 3)[3].split("?", 1)[0])
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                if not job or job.get("username") != session_user(self):
+                    self.send_json({"error": "Job not found"}, 404)
+                    return
+                self.send_json(job_public(job))
             return
         if self.path.startswith("/api/job"):
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             job_id = qs.get("id", [""])[0]
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
-                username = session_user(self)
-                if not job or job.get("username") != username:
+                if not job or job.get("username") != session_user(self):
                     self.send_json({"error": "Job not found"}, 404)
                     return
-                result = job_public(job)
-            self.send_json(result)
+                self.send_json(job_public(job))
             return
         self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self):
         try:
-            n = int(self.headers.get("Content-Length", "0"))
+            size = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            n = 0
-        raw = self.rfile.read(n)
+            size = 0
+        raw = self.rfile.read(size)
         if self.path == "/api/login":
             try:
-                data = urllib.parse.parse_qs(raw.decode("utf-8", errors="ignore"))
-                username = data.get("username", [""])[0]
-                password = data.get("password", [""])[0]
+                form = urllib.parse.parse_qs(raw.decode("utf-8", errors="ignore"))
+                username = form.get("username", [""])[0]
+                password = form.get("password", [""])[0]
                 cfg = auth_config()
                 if secrets.compare_digest(username, cfg["username"]) and secrets.compare_digest(password, cfg["password"]):
                     token = create_session(username)
@@ -560,35 +598,37 @@ class H(BaseHTTPRequestHandler):
             self.send_json({"error": "Invalid JSON"}, 400)
             return
         if self.path == "/api/state":
-            DATA.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-            self.send_json({"ok": True})
+            current = load()
+            if isinstance(data, dict):
+                current.update(data)
+                DATA.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+            self.send_json({"ok": True, "state": load()})
             return
         if self.path == "/api/files":
             try:
                 self.send_json(file_tool(data.get("name"), data.get("args", {})))
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
             return
         if self.path == "/api/search":
             try:
                 cfg = data.get("search") or {}
-                results = search_web(cfg.get("query", ""), cfg.get("provider", "duckduckgo"), cfg.get("api_key", ""))
-                self.send_json({"query": cfg.get("query", ""), "results": results})
-            except Exception as e:
-                self.send_json({"error": str(e)}, 502)
+                self.send_json({"query": cfg.get("query", ""), "results": search_web(cfg.get("query", ""), cfg.get("provider", "duckduckgo"), cfg.get("api_key", ""))})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 502)
             return
         if self.path == "/api/shell":
             try:
                 self.send_json(shell_tool(data))
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
             return
-        if self.path == "/api/chat/stop":
+        if self.path in {"/api/chat/stop", "/api/jobs/stop"}:
             job_id = str(data.get("job_id", ""))
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
-                if not job:
-                    self.send_json({"ok": False, "stopped": False})
+                if not job or job.get("username") != session_user(self):
+                    self.send_json({"ok": False, "stopped": False}, 404)
                     return
                 job["cancelled"] = True
                 job["updated"] = time.time()
@@ -599,8 +639,19 @@ class H(BaseHTTPRequestHandler):
             job_id = str(data.get("job_id") or uuid.uuid4())
             now = time.time()
             with JOBS_LOCK:
-                JOBS[job_id] = {"job_id": job_id, "username": username, "cancelled": False, "status": "running", "phase": "queued", "step": 0, "created": now, "updated": now, "content": "", "tools": []}
-            threading.Thread(target=run_job, args=(job_id, data), daemon=True, name=f"jolgue-job-{job_id[:8]}").start()
+                JOBS[job_id] = {
+                    "job_id": job_id,
+                    "username": username,
+                    "cancelled": False,
+                    "status": "running",
+                    "phase": "queued",
+                    "step": 0,
+                    "created": now,
+                    "updated": now,
+                    "content": "",
+                    "tools": [],
+                }
+            threading.Thread(target=run_job, args=(job_id, data), daemon=True, name="jolgue-job-" + job_id[:8]).start()
             self.send_json({"ok": True, "job_id": job_id, "status": "running"})
             return
         self.send_json({"error": "Not found"}, 404)
@@ -608,17 +659,14 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     WORKSPACE.mkdir(exist_ok=True)
-    load()
-    cfg = auth_config()
+    cfg = load()
+    auth = auth_config()
     print(f"Jolgue AI listening on http://{HOST}:{PORT}")
-    print("Agent jobs run independently of the browser and have no default timeout.")
-    if MAX_AGENT_STEPS == 0:
-        print("Agent steps: unlimited")
-    else:
-        print(f"Agent steps: {MAX_AGENT_STEPS}")
-    if cfg.get("generated"):
-        print(f"Login username: {cfg['username']}")
-        print(f"Generated login password: {cfg['password']}")
-    elif os.getenv("JOLGUE_PASSWORD"):
-        print(f"Login username: {cfg['username']}")
+    print(f"Provider Base URL: {cfg['provider']['base_url']}")
+    print(f"Provider Model: {cfg['provider']['model']}")
+    print("Agent jobs run independently of the browser.")
+    print("Agent steps: unlimited" if MAX_AGENT_STEPS == 0 else f"Agent steps: {MAX_AGENT_STEPS}")
+    if auth.get("generated"):
+        print(f"Login username: {auth['username']}")
+        print(f"Generated login password: {auth['password']}")
     ThreadingHTTPServer((HOST, PORT), H).serve_forever()
