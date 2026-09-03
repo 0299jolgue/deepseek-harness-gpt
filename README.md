@@ -1,6 +1,6 @@
 # Jolgue AI
 
-A small Python AI workspace designed for constrained hosting such as Shardcloud.
+Minimal Python-first AI workspace designed for constrained hosting such as Shardcloud.
 
 ## Start
 
@@ -8,25 +8,29 @@ A small Python AI workspace designed for constrained hosting such as Shardcloud.
 python main.py
 ```
 
-The app binds to `0.0.0.0` and uses `PORT` when provided, otherwise port `80`.
+The server binds to `0.0.0.0` and uses port `80` by default. Set `PORT` to override it.
 
-## Provider
+## Workspace
 
-The web UI accepts any OpenAI-compatible API endpoint. For NVIDIA NIM / NVIDIA API compatible deployments, configure:
+The web UI is organized around reusable **Templates**:
 
-- Base URL: `https://integrate.api.nvidia.com/v1`
-- API key: your NVIDIA API key
-- Model: your chosen NVIDIA-hosted model
+- General
+- Coding Agent
+- Research
+- Writer
+- Debugger
+- Custom
 
-Configuration is saved locally in `data.json` after first use.
+A chat is created from a template and belongs to a project. This gives the workspace a simple hierarchy:
 
-## Features
+**Templates → Projects → Chats**
 
-- Projects represented by independent chats
-- Persistent local chat history
-- Custom provider URL/model/API key
-- Custom skills stored as instructions
-- Browser UI with no Node.js build step
-- One-file Python server with no frontend build toolchain
+Custom **Skills** can be stored and injected into the active agent prompt. Provider settings support NVIDIA's OpenAI-compatible endpoint by default, plus other OpenAI-compatible providers.
 
-For production, put the API key in an environment variable or secret manager rather than storing it in browser-sent state.
+## Runtime
+
+The app uses Python's standard library only. No Node.js, pnpm, Flask, frontend build step, or external package is required.
+
+On first startup, `data.json` is created automatically for local persistence.
+
+For production, prefer setting `NVIDIA_API_KEY` (or another secret mechanism) instead of storing an API key in browser-managed state.
