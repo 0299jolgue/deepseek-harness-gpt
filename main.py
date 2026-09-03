@@ -1,120 +1,93 @@
 import json
 import os
-import urllib.error
+import re
 import urllib.request
-from html import escape
+import urllib.error
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data.json"
+TEMPLATES = ROOT / "templates"
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "80"))
 
-TEMPLATES = [
-    {"id":"general","name":"General","icon":"✦","description":"Versatile assistant for everyday tasks.","system":"You are Jolgue AI, a precise and helpful general-purpose assistant."},
-    {"id":"coding","name":"Coding Agent","icon":"⌘","description":"Build, debug and explain software.","system":"You are Jolgue Coding Agent. Write production-quality code, reason about bugs, and explain implementation choices clearly."},
-    {"id":"research","name":"Research","icon":"◈","description":"Analyze topics and synthesize information.","system":"You are Jolgue Research Agent. Separate facts from assumptions, structure evidence, and be explicit about uncertainty."},
-    {"id":"writer","name":"Writer","icon":"✎","description":"Draft, rewrite and polish text.","system":"You are Jolgue Writer. Produce clear, natural, audience-aware writing while preserving the user's intent."},
-    {"id":"debugger","name":"Debugger","icon":"⚙","description":"Find root causes and fixes.","system":"You are Jolgue Debugger. Diagnose root causes methodically, propose minimal fixes, and verify edge cases."},
-    {"id":"custom","name":"Custom","icon":"＋","description":"Create your own reusable agent template.","system":"You are a custom Jolgue AI agent. Follow the template instructions supplied by the user."},
-]
-
-INDEX = r'''<!doctype html>
+BASE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI</title>
 <style>
-:root{--bg:#090b10;--panel:#0f131a;--panel2:#141923;--line:#252b38;--text:#f4f6f8;--muted:#8e98a8;--accent:#e8edf5}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{border-right:1px solid var(--line);background:var(--panel);padding:14px;overflow:auto}.brand{font-weight:800;font-size:18px;padding:8px 8px 16px}.nav{display:grid;gap:5px;margin-bottom:16px}.nav button,.project,.chatrow{width:100%;text-align:left;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--text);padding:9px}.nav button:hover,.project:hover,.chatrow:hover{background:var(--panel2)}.nav button.active,.chatrow.active{background:#1b202b;border-color:var(--line)}.section{margin-top:18px}.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin:0 8px 7px}.stack{display:grid;gap:5px}.main{display:flex;min-width:0;flex-direction:column}.top{height:60px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px}.top-title{font-weight:700}.top-actions{display:flex;gap:7px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);padding:8px 11px}.btn.primary{background:var(--accent);color:#0b0d12;border-color:var(--accent);font-weight:700}.content{flex:1;overflow:auto}.screen{max-width:1120px;margin:0 auto;padding:28px}.hero h1{font-size:30px;margin:0 0 7px}.hero p{margin:0;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:24px}.card{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:18px;transition:.15s}.card:hover{border-color:#3a4252;transform:translateY(-1px)}.icon{font-size:22px}.card h3{margin:12px 0 6px}.card p{color:var(--muted);min-height:38px;line-height:1.45}.card button{margin-top:13px;width:100%}.chatview{display:flex;height:calc(100vh - 60px);flex-direction:column}.messages{flex:1;overflow:auto;padding:28px;max-width:900px;width:100%;margin:0 auto}.msg{padding:13px 15px;border-radius:12px;margin:12px 0;line-height:1.55;white-space:pre-wrap}.user{background:#1a202b}.assistant{background:#11161e;border:1px solid #1d2430}.composer{display:flex;gap:9px;max-width:900px;width:100%;margin:0 auto;padding:14px 20px 20px}.composer textarea{flex:1;min-height:58px;max-height:180px;resize:vertical;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:13px;outline:none}.composer textarea:focus,input:focus{border-color:#566178}.empty{height:100%;display:grid;place-items:center;color:var(--muted);text-align:center}.panel{max-width:760px;margin:0 auto;border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:18px}.field{display:grid;gap:6px;margin:12px 0}.field label{font-size:12px;color:var(--muted)}input,textarea,select{width:100%;background:#0c1016;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px}.row{display:flex;gap:8px;align-items:center}.small{font-size:12px;color:var(--muted)}.pill{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:4px 7px;color:var(--muted)}.sep{height:1px;background:var(--line);margin:14px 0}@media(max-width:850px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;z-index:5;border-right:0;border-bottom:1px solid var(--line);height:auto}.grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{padding:0 12px}.screen{padding:20px 14px}.messages{padding:18px 12px}.composer{padding:10px 12px 14px}}
-</style></head><body><div id="app" class="app"></div>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui;background:#090b0f;color:#eef0f4}button,input,textarea{font:inherit}button{cursor:pointer}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:#10131a;border-right:1px solid #222733;padding:16px;overflow:auto}.brand{font-size:20px;font-weight:800;margin-bottom:18px}.nav button,.template,.chat-item{display:block;width:100%;text-align:left;border:1px solid transparent;background:transparent;color:#bbc2cf;padding:10px 11px;border-radius:9px;margin:3px 0}.nav button:hover,.template:hover,.chat-item:hover{background:#181c25;color:#fff}.template.active,.chat-item.active{background:#1b202a;border-color:#303746;color:#fff}.section{margin-top:20px}.label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#737c8c;margin:12px 2px 6px}.main{display:flex;flex-direction:column;min-width:0}.top{height:60px;border-bottom:1px solid #222733;padding:0 22px;display:flex;align-items:center;justify-content:space-between}.title{font-weight:750}.sub{font-size:12px;color:#7f8796}.content{display:grid;grid-template-columns:1fr 300px;min-height:calc(100vh - 60px)}.chat{display:flex;flex-direction:column;min-width:0}.messages{flex:1;overflow:auto;padding:28px;max-width:960px;width:100%;margin:auto}.welcome{padding:50px 10px;text-align:center;color:#798292}.msg{max-width:820px;padding:13px 15px;border-radius:13px;margin:12px auto;white-space:pre-wrap;line-height:1.55}.user{background:#202633}.assistant{background:#151922}.composer{display:flex;gap:9px;padding:16px;max-width:960px;width:100%;margin:auto}.composer textarea{flex:1;resize:none;min-height:56px;max-height:180px;background:#11151d;color:#fff;border:1px solid #303644;border-radius:12px;padding:13px}.send{width:82px;border:0;border-radius:12px;background:#fff;color:#0a0b0e;font-weight:800}.panel{border-left:1px solid #222733;padding:18px;background:#0d1015;overflow:auto}.card{background:#11151c;border:1px solid #252b37;border-radius:13px;padding:14px;margin-bottom:12px}.card h3{margin:0 0 7px;font-size:14px}.card p{margin:0;color:#858e9e;font-size:12px;line-height:1.5}.field{width:100%;margin:6px 0;padding:9px 10px;background:#0f131a;color:#fff;border:1px solid #2a303c;border-radius:9px}.small{font-size:11px;color:#727b8b}.row{display:flex;gap:7px}.row>*{flex:1}.primary{background:#fff;color:#0a0b0e;border:0;border-radius:9px;padding:9px 11px;font-weight:700}.danger{background:#1a1114;color:#ff9a9a;border:1px solid #47252a;border-radius:9px;padding:8px 10px}.template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.template-title{font-weight:700}.template-desc{font-size:12px;color:#7f8796;margin-top:2px}@media(max-width:900px){.content{grid-template-columns:1fr}.panel{display:none}}@media(max-width:650px){.app{grid-template-columns:1fr}.sidebar{display:none}.template-grid{grid-template-columns:1fr}}
+</style></head><body><div class="app"><aside class="sidebar"><div class="brand">Jolgue AI</div><div class="nav"><button onclick="newProject()">＋ New project</button><button onclick="newChat()">＋ New chat</button></div><div class="section"><div class="label">Templates</div><div id="templates"></div></div><div class="section"><div class="label">Chats</div><div id="chats"></div></div><div class="section"><div class="label">Skills</div><div id="skills"></div></div></aside><main class="main"><header class="top"><div><div class="title" id="title">Select a template</div><div class="sub" id="subtitle">Jolgue AI workspace</div></div><div class="sub" id="projectLabel"></div></header><div class="content"><section class="chat"><div id="messages" class="messages"><div class="welcome"><h2>Choose a template</h2><p>Templates are stored as separate HTML files in <b>templates/</b>.</p></div></div><div class="composer"><textarea id="input" placeholder="Message..."></textarea><button class="send" onclick="send()">Send</button></div></section><aside class="panel"><div class="card"><h3>Provider</h3><input class="field" id="base" placeholder="Base URL"><input class="field" id="model" placeholder="Model"><input class="field" id="key" placeholder="API key" type="password"><button class="primary" onclick="saveProvider()">Save</button></div><div class="card"><h3>New skill</h3><input class="field" id="skillName" placeholder="Skill name"><textarea class="field" id="skillBody" placeholder="Instructions"></textarea><button class="primary" onclick="createSkill()">Create skill</button></div><div class="card"><h3>Current template</h3><div id="currentTemplate" class="small">None</div></div></aside></div></main></div>
 <script>
-const TEMPLATES=__TEMPLATES__;
-const state={data:null,view:'templates',template:null,project:null,chat:null};
-const $=id=>document.getElementById(id);
+const S={data:null,template:null,chat:null};
 async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return r.json()}
-async function save(){await api('/api/state','POST',state.data)}
-function esc(s){return String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
-function getTemplate(id){return TEMPLATES.find(t=>t.id===id)||TEMPLATES[0]}
-function ensureData(){if(!state.data.projects?.length)state.data.projects=[{id:crypto.randomUUID(),name:'My Project'}];if(!state.data.chats)state.data.chats=[];if(!state.data.templates)state.data.templates=[];if(!state.data.skills)state.data.skills=[]}
-async function boot(){state.data=await api('/api/state');ensureData();state.project=state.data.projects[0];render()}
-function sidebar(){return `<aside class="sidebar"><div class="brand">Jolgue AI</div><div class="nav"><button class="${state.view==='templates'?'active':''}" onclick="go('templates')">✦ Templates</button><button class="${state.view==='projects'?'active':''}" onclick="go('projects')">▦ Projects</button><button class="${state.view==='skills'?'active':''}" onclick="go('skills')">◇ Skills</button><button class="${state.view==='settings'?'active':''}" onclick="go('settings')">⚙ Settings</button></div><div class="section"><div class="label">Projects</div><div class="stack">${state.data.projects.map(p=>`<button class="project" onclick="openProject('${p.id}')">${esc(p.name)}</button>`).join('')}</div></div><div class="section"><div class="label">Recent chats</div><div class="stack">${state.data.chats.slice(0,8).map(c=>`<button class="chatrow ${state.chat?.id===c.id?'active':''}" onclick="openChat('${c.id}')">${esc(c.title||'New chat')}<div class="small">${esc(getTemplate(c.template_id).name)}</div></button>`).join('')}</div></div></aside>`}
-function render(){document.getElementById('app').innerHTML=sidebar()+`<main class="main"><header class="top"><div class="top-title">${headerTitle()}</div><div class="top-actions">${state.view==='chat'?'<button class="btn" onclick="go(\'templates\')">Templates</button>':''}<button class="btn primary" onclick="newChat()">+ New chat</button></div></header><div class="content">${screen()}</div></main>`;if(state.view==='chat')scrollBottom()}
-function headerTitle(){if(state.view==='chat')return `${esc(state.chat?.title||'New chat')} <span class="pill">${esc(getTemplate(state.chat?.template_id).name)}</span>`;return state.view==='templates'?'Templates':state.view[0].toUpperCase()+state.view.slice(1)}
-function screen(){if(state.view==='templates')return templatesScreen();if(state.view==='projects')return projectsScreen();if(state.view==='skills')return skillsScreen();if(state.view==='settings')return settingsScreen();return chatScreen()}
-function templatesScreen(){return `<div class="screen"><div class="hero"><h1>Choose a template</h1><p>Start a chat with a purpose-built agent. Each template keeps its own instructions and behavior.</p></div><div class="grid">${TEMPLATES.map(t=>`<article class="card"><div class="icon">${t.icon}</div><h3>${esc(t.name)}</h3><p>${esc(t.description)}</p><button class="btn primary" onclick="useTemplate('${t.id}')">Use template</button></article>`).join('')}</div></div>`}
-function projectsScreen(){return `<div class="screen"><div class="hero"><h1>Projects</h1><p>Keep related chats together. Templates can be reused inside every project.</p></div><div class="grid">${state.data.projects.map(p=>`<article class="card"><h3>${esc(p.name)}</h3><p>${state.data.chats.filter(c=>c.project_id===p.id).length} chats</p><button class="btn" onclick="openProject('${p.id}')">Open project</button></article>`).join('')}<article class="card"><h3>New project</h3><p>Create a separate workspace for a new goal.</p><button class="btn primary" onclick="createProject()">Create project</button></article></div></div>`}
-function skillsScreen(){return `<div class="screen"><div class="hero"><h1>Skills</h1><p>Reusable instructions that can be attached to templates and chats.</p></div><div class="panel"><div class="field"><label>Name</label><input id="skill-name" placeholder="e.g. Roblox Luau Expert"></div><div class="field"><label>Instructions</label><textarea id="skill-body" rows="7" placeholder="Describe what the skill should make the agent do..."></textarea></div><button class="btn primary" onclick="createSkill()">Create skill</button><div class="sep"></div>${state.data.skills.length?state.data.skills.map(s=>`<div class="row" style="justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)"><div><b>${esc(s.name)}</b><div class="small">${esc(s.instructions)}</div></div><span class="pill">skill</span></div>`).join(''):'<div class="small">No custom skills yet.</div>'}</div></div>`}
-function settingsScreen(){const p=state.data.provider||{};return `<div class="screen"><div class="hero"><h1>Provider</h1><p>Configure any OpenAI-compatible endpoint. NVIDIA is the default.</p></div><div class="panel"><div class="field"><label>Base URL</label><input id="cfg-base" value="${esc(p.base_url||'')}"></div><div class="field"><label>Model</label><input id="cfg-model" value="${esc(p.model||'')}"></div><div class="field"><label>API key</label><input id="cfg-key" type="password" placeholder="Leave blank to use NVIDIA_API_KEY" value="${esc(p.api_key||'')}"></div><button class="btn primary" onclick="saveCfg()">Save provider</button><div class="sep"></div><div class="small">The API key is currently stored with the local application state. For production, use an environment secret instead.</div></div></div>`}
-function chatScreen(){if(!state.chat)return `<div class="empty">Choose a template to start.</div>`;return `<div class="chatview"><div id="messages" class="messages">${state.chat.messages.length?state.chat.messages.map(m=>`<div class="msg ${m.role==='user'?'user':'assistant'}"><b>${m.role==='user'?'You':'Jolgue AI'}</b><br>${esc(m.content)}</div>`).join(''):'<div class="empty"><div><h2>${esc(getTemplate(state.chat.template_id).name)}</h2><div>Start the conversation with this template.</div></div></div>'}</div><div class="composer"><textarea id="input" placeholder="Message..." onkeydown="key(event)"></textarea><button class="btn primary" onclick="send()">Send</button></div></div>`}
-function go(v){state.view=v;render()}
-function useTemplate(id){state.template=getTemplate(id);newChat(id)}
-async function newChat(templateId){const id=typeof templateId==='string'?templateId:state.template?.id||TEMPLATES[0].id;const c={id:crypto.randomUUID(),title:'New chat',messages:[],template_id:id,project_id:(state.project||state.data.projects[0]).id};state.data.chats.unshift(c);state.chat=c;state.view='chat';await save();render()}
-function openChat(id){state.chat=state.data.chats.find(c=>c.id===id);state.project=state.data.projects.find(p=>p.id===state.chat?.project_id)||state.data.projects[0];state.view='chat';render()}
-function openProject(id){state.project=state.data.projects.find(p=>p.id===id)||state.data.projects[0];state.view='projects';render()}
-async function createProject(){const name=prompt('Project name');if(!name?.trim())return;state.data.projects.push({id:crypto.randomUUID(),name:name.trim()});state.project=state.data.projects.at(-1);await save();render()}
-async function createSkill(){const name=$('skill-name')?.value.trim(),instructions=$('skill-body')?.value.trim();if(!name||!instructions)return alert('Fill both fields.');state.data.skills.push({id:crypto.randomUUID(),name,instructions});await save();render()}
-async function saveCfg(){state.data.provider={base_url:$('cfg-base').value.trim(),model:$('cfg-model').value.trim(),api_key:$('cfg-key').value};await save();alert('Provider saved.')}
-function selectedSkills(){return state.data.skills}
-async function send(){const i=$('input');const text=i.value.trim();if(!text||!state.chat)return;i.value='';state.chat.messages.push({role:'user',content:text});if(state.chat.messages.length===1)state.chat.title=text.slice(0,48);render();const payload={messages:state.chat.messages,provider:state.data.provider,template:getTemplate(state.chat.template_id),skills:selectedSkills()};const r=await api('/api/chat','POST',payload);state.chat.messages.push({role:'assistant',content:r.content||r.error||'No response'});await save();render()}
-function key(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}
-function scrollBottom(){setTimeout(()=>{const m=$('messages');if(m)m.scrollTop=m.scrollHeight},0)}
-boot();
-</script></body></html>'''
+async function load(){S.data=await api('/api/state');render();}
+function esc(s=''){return String(s).replace(/[&<>\"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[x]))}
+function render(){const d=S.data||{};document.getElementById('base').value=d.provider?.base_url||'';document.getElementById('model').value=d.provider?.model||'';document.getElementById('templates').innerHTML=(d.templates||[]).map(t=>`<button class="template ${S.template?.id===t.id?'active':''}" onclick="pickTemplate('${esc(t.id)}')"><div class="template-title">${esc(t.name)}</div><div class="template-desc">${esc(t.description)}</div></button>`).join('');document.getElementById('chats').innerHTML=(d.chats||[]).map(c=>`<button class="chat-item ${S.chat?.id===c.id?'active':''}" onclick="pickChat('${esc(c.id)}')">${esc(c.title||'New chat')}</button>`).join('');document.getElementById('skills').innerHTML=(d.skills||[]).map(s=>`<div class="small" style="padding:5px">• ${esc(s.name)}</div>`).join('');document.getElementById('title').textContent=S.chat?.title||S.template?.name||'Select a template';document.getElementById('subtitle').textContent=S.template?S.template.description:'Jolgue AI workspace';document.getElementById('projectLabel').textContent=S.chat?.project||'';document.getElementById('currentTemplate').textContent=S.template?S.template.name:'None';const msgs=S.chat?.messages||[];document.getElementById('messages').innerHTML=msgs.length?msgs.map(m=>`<div class="msg ${m.role==='user'?'user':'assistant'}"><b>${m.role==='user'?'You':'AI'}</b><br>${esc(m.content)}</div>`).join(''):`<div class="welcome"><h2>${esc(S.template?.name||'Choose a template')}</h2><p>${esc(S.template?.description||'Pick a template from the sidebar.')}</p></div>`;}
+function pickTemplate(id){S.template=S.data.templates.find(t=>t.id===id);S.chat=null;render()}
+function pickChat(id){S.chat=S.data.chats.find(c=>c.id===id);S.template=S.data.templates.find(t=>t.id===S.chat?.template_id)||null;render()}
+async function newChat(){if(!S.template){pickTemplate(S.data.templates[0]?.id);if(!S.template)return}const c={id:crypto.randomUUID(),title:'New chat',project:'Default',template_id:S.template.id,messages:[]};S.data.chats.unshift(c);S.chat=c;await save();render()}
+async function newProject(){alert('Projects are attached to chats in this lightweight build. Create a new chat and set its project in a later update.')}
+async function save(){await api('/api/state','POST',S.data)}
+async function send(){if(!S.template){alert('Choose a template first.');return}if(!S.chat)await newChat();const i=document.getElementById('input'),text=i.value.trim();if(!text)return;i.value='';S.chat.messages.push({role:'user',content:text});if(S.chat.title==='New chat')S.chat.title=text.slice(0,40)||'Chat';render();const r=await api('/api/chat','POST',{messages:S.chat.messages,provider:S.data.provider,template:S.template,skills:S.data.skills});S.chat.messages.push({role:'assistant',content:r.content||r.error||'No response'});await save();render()}
+function saveProvider(){S.data.provider.base_url=document.getElementById('base').value.trim();S.data.provider.model=document.getElementById('model').value.trim();S.data.provider.api_key=document.getElementById('key').value.trim();save()}
+async function createSkill(){const n=document.getElementById('skillName').value.trim(),b=document.getElementById('skillBody').value.trim();if(!n||!b)return;S.data.skills.push({id:crypto.randomUUID(),name:n,instructions:b});await save();document.getElementById('skillName').value='';document.getElementById('skillBody').value='';render()}
+document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});load();
+</script></body></html>"""
 
+def read_templates():
+    result=[]
+    TEMPLATES.mkdir(exist_ok=True)
+    for f in sorted(TEMPLATES.glob('*.html')):
+        if f.name.startswith('_'): continue
+        text=f.read_text(encoding='utf-8')
+        def attr(name, default=''):
+            m=re.search(r'data-'+re.escape(name)+r'=\"([^\"]*)\"',text,re.I)
+            return m.group(1) if m else default
+        result.append({'id':f.stem,'name':attr('name',f.stem.replace('-',' ').title()),'description':attr('description','Custom AI template'),'file':f.name,'prompt':attr('prompt','')})
+    return result
 
 def defaults():
-    return {"provider":{"base_url":os.getenv("NVIDIA_BASE_URL","https://integrate.api.nvidia.com/v1"),"model":os.getenv("NVIDIA_MODEL","meta/llama-3.1-8b-instruct"),"api_key":os.getenv("NVIDIA_API_KEY","")},"projects":[{"id":"default","name":"My Project"}],"chats":[],"skills":[],"templates":TEMPLATES}
+    return {'provider':{'base_url':os.getenv('NVIDIA_BASE_URL','https://integrate.api.nvidia.com/v1'),'model':os.getenv('NVIDIA_MODEL','meta/llama-3.1-8b-instruct'),'api_key':os.getenv('NVIDIA_API_KEY','')},'templates':read_templates(),'projects':[{'id':'default','name':'Default'}],'chats':[],'skills':[]}
 
 def load():
-    if not DATA.exists():
-        d=defaults(); DATA.write_text(json.dumps(d,indent=2)); return d
-    try:
-        d=json.loads(DATA.read_text())
-        base=defaults(); base.update(d)
-        return base
-    except Exception:
-        return defaults()
+    d=defaults()
+    if DATA.exists():
+        try:
+            saved=json.loads(DATA.read_text())
+            d.update(saved)
+            d['templates']=read_templates()
+        except Exception: pass
+    else: DATA.write_text(json.dumps(d,indent=2))
+    return d
 
 def call_llm(payload):
-    p=payload.get("provider") or {}
-    base=(p.get("base_url") or "").rstrip("/")
-    model=p.get("model") or "meta/llama-3.1-8b-instruct"
-    key=p.get("api_key") or os.getenv("NVIDIA_API_KEY","")
-    if not base or not key: raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
-    template=payload.get("template") or {}
-    system=template.get("system") or "You are Jolgue AI, a helpful assistant."
-    for s in payload.get("skills",[]):
-        system += f"\n\nSkill: {s.get('name')}\n{s.get('instructions')}"
-    messages=[{"role":"system","content":system}]+payload.get("messages",[])
-    body=json.dumps({"model":model,"messages":messages,"temperature":0.2,"stream":False}).encode()
-    req=urllib.request.Request(base+"/chat/completions",data=body,headers={"Content-Type":"application/json","Authorization":"Bearer "+key},method="POST")
-    with urllib.request.urlopen(req,timeout=180) as r:
-        out=json.loads(r.read())
-    return out["choices"][0]["message"]["content"]
+    p=payload.get('provider') or {}; base=(p.get('base_url') or '').rstrip('/'); model=p.get('model') or 'meta/llama-3.1-8b-instruct'; key=p.get('api_key') or os.getenv('NVIDIA_API_KEY','')
+    if not base or not key: raise RuntimeError('Configure an OpenAI-compatible Base URL and API key.')
+    t=payload.get('template') or {}; system='You are Jolgue AI.\n\nTemplate: '+t.get('name','General')+'\n'+t.get('prompt','')+'\n'
+    for s in payload.get('skills',[]): system+=f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
+    body=json.dumps({'model':model,'messages':[{'role':'system','content':system}]+payload.get('messages',[]),'temperature':0.2,'stream':False}).encode()
+    req=urllib.request.Request(base+'/chat/completions',data=body,headers={'Content-Type':'application/json','Authorization':'Bearer '+key},method='POST')
+    with urllib.request.urlopen(req,timeout=180) as r:return json.loads(r.read())['choices'][0]['message']['content']
 
-class Handler(BaseHTTPRequestHandler):
+class H(BaseHTTPRequestHandler):
     def send_json(self,obj,status=200):
-        b=json.dumps(obj).encode();self.send_response(status);self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b)
+        b=json.dumps(obj).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
     def do_GET(self):
-        path=urlparse(self.path).path
-        if path=="/":
-            html=INDEX.replace("__TEMPLATES__",json.dumps(TEMPLATES,separators=(",",":")))
-            b=html.encode();self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(b)));self.end_headers();self.wfile.write(b);return
-        if path=="/api/state": self.send_json(load());return
-        self.send_json({"error":"Not found"},404)
+        if self.path=='/':
+            b=BASE_HTML.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b);return
+        if self.path=='/api/state': self.send_json(load());return
+        self.send_json({'error':'Not found'},404)
     def do_POST(self):
-        n=int(self.headers.get("Content-Length","0"));raw=self.rfile.read(n)
-        try:data=json.loads(raw or b"{}")
-        except Exception:self.send_json({"error":"Invalid JSON"},400);return
-        if self.path=="/api/state":
-            try: DATA.write_text(json.dumps(data,indent=2));self.send_json({"ok":True})
-            except Exception as e:self.send_json({"error":str(e)},500)
+        n=int(self.headers.get('Content-Length','0'));raw=self.rfile.read(n)
+        try:data=json.loads(raw or b'{}')
+        except Exception:self.send_json({'error':'Invalid JSON'},400);return
+        if self.path=='/api/state': DATA.write_text(json.dumps(data,indent=2));self.send_json({'ok':True});return
+        if self.path=='/api/chat':
+            try:self.send_json({'content':call_llm(data)})
+            except urllib.error.HTTPError as e:self.send_json({'error':f'Provider HTTP {e.code}: {e.read().decode(errors="ignore")}'},502)
+            except Exception as e:self.send_json({'error':str(e)},500)
             return
-        if self.path=="/api/chat":
-            try:self.send_json({"content":call_llm(data)})
-            except urllib.error.HTTPError as e:self.send_json({"error":f"Provider HTTP {e.code}: {e.read().decode(errors='ignore')}"},502)
-            except Exception as e:self.send_json({"error":str(e)},500)
-            return
-        self.send_json({"error":"Not found"},404)
+        self.send_json({'error':'Not found'},404)
 
-if __name__=="__main__":
-    load();print(f"Jolgue AI listening on {HOST}:{PORT}");ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
+if __name__=='__main__':
+    load();print(f'Jolgue AI listening on {HOST}:{PORT}');ThreadingHTTPServer((HOST,PORT),H).serve_forever()
