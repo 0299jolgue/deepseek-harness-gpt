@@ -8,7 +8,7 @@ Minimal Python-first AI workspace designed for constrained hosting such as Shard
 python main.py
 ```
 
-The server binds to `0.0.0.0` and uses port `80` by default. Set `PORT` to override it.
+The server binds to `0.0.0.0` on port `80`.
 
 ## Workspace
 
@@ -26,6 +26,14 @@ A chat is created from a template and belongs to a project. This gives the works
 **Templates → Projects → Chats**
 
 Custom **Skills** can be stored and injected into the active agent prompt. Provider settings support NVIDIA's OpenAI-compatible endpoint by default, plus other OpenAI-compatible providers.
+
+## Autonomous background agent
+
+Chat requests are turned into server-side jobs and return a job ID immediately. The worker continues independently of the browser request.
+
+Closing the tab, refreshing the page, or reopening the site does not cancel an active agent job. The UI reconnects to active jobs after reload and retrieves the final result when it completes.
+
+The default runtime has no timeout for provider requests, shell commands, or web-search requests. Agent steps are unlimited by default; set `MAX_AGENT_STEPS` to a positive value to impose a limit.
 
 ## Runtime
 
