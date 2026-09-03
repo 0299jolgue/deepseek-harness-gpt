@@ -6,6 +6,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -97,7 +98,7 @@ def session_user(handler):
         item = SESSIONS.get(value)
         if not item:
             return None
-        if item["expires"] < __import__("time").time():
+        if item["expires"] < time.time():
             SESSIONS.pop(value, None)
             return None
         return item["username"]
@@ -106,7 +107,7 @@ def session_user(handler):
 def create_session(username):
     token = secrets.token_urlsafe(32)
     with SESSIONS_LOCK:
-        SESSIONS[token] = {"username": username, "expires": __import__("time").time() + SESSION_TTL}
+        SESSIONS[token] = {"username": username, "expires": time.time() + SESSION_TTL}
     return token
 
 
@@ -123,87 +124,60 @@ def safe_path(name):
 
 def list_files():
     WORKSPACE.mkdir(exist_ok=True)
-    return [
-        {"path": str(p.relative_to(WORKSPACE)), "size": p.stat().st_size}
-        for p in sorted(WORKSPACE.rglob("*"))
-        if p.is_file()
-    ]
+    return [{"path": str(p.relative_to(WORKSPACE)), "size": p.stat().st_size} for p in sorted(WORKSPACE.rglob("*")) if p.is_file()]
 
 
 def file_tool(name, args):
     if name in ("create_file", "write_file"):
-        p = safe_path(args.get("path"))
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(args.get("content", ""), encoding="utf-8")
+        p = safe_path(args.get("path")); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(args.get("content", ""), encoding="utf-8")
         return {"ok": True, "path": str(p.relative_to(WORKSPACE))}
     if name == "read_file":
         p = safe_path(args.get("path"))
-        if not p.is_file():
-            raise ValueError("File not found")
+        if not p.is_file(): raise ValueError("File not found")
         return {"ok": True, "path": str(p.relative_to(WORKSPACE)), "content": p.read_text(encoding="utf-8")}
     if name == "delete_file":
         p = safe_path(args.get("path"))
-        if p.is_dir():
-            shutil.rmtree(p)
-        elif p.exists():
-            p.unlink()
+        if p.is_dir(): shutil.rmtree(p)
+        elif p.exists(): p.unlink()
         return {"ok": True, "path": str(p.relative_to(WORKSPACE))}
     if name == "create_directory":
-        p = safe_path(args.get("path"))
-        p.mkdir(parents=True, exist_ok=True)
+        p = safe_path(args.get("path")); p.mkdir(parents=True, exist_ok=True)
         return {"ok": True, "path": str(p.relative_to(WORKSPACE))}
     if name == "move_file":
-        src = safe_path(args.get("source"))
-        dest = safe_path(args.get("destination"))
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
+        src = safe_path(args.get("source")); dest = safe_path(args.get("destination")); dest.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(src), str(dest))
         return {"ok": True, "path": str(dest.relative_to(WORKSPACE))}
     if name == "copy_file":
-        src = safe_path(args.get("source"))
-        dest = safe_path(args.get("destination"))
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if src.is_dir():
-            shutil.copytree(src, dest, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dest)
+        src = safe_path(args.get("source")); dest = safe_path(args.get("destination")); dest.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir(): shutil.copytree(src, dest, dirs_exist_ok=True)
+        else: shutil.copy2(src, dest)
         return {"ok": True, "path": str(dest.relative_to(WORKSPACE))}
     if name == "zip_files":
-        src = safe_path(args.get("source", "."))
-        dest = safe_path(args.get("output", "archive.zip"))
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        src = safe_path(args.get("source", ".")); dest = safe_path(args.get("output", "archive.zip")); dest.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-            if src.is_file():
-                z.write(src, src.name)
+            if src.is_file(): z.write(src, src.name)
             else:
                 for p in src.rglob("*"):
-                    if p.is_file() and p != dest:
-                        z.write(p, p.relative_to(src))
+                    if p.is_file() and p != dest: z.write(p, p.relative_to(src))
         rel = str(dest.relative_to(WORKSPACE))
         return {"ok": True, "path": rel, "download_url": "/download?path=" + urllib.parse.quote(rel)}
     if name == "unzip_files":
-        src = safe_path(args.get("archive"))
-        dest = safe_path(args.get("output", "unzipped"))
-        dest.mkdir(parents=True, exist_ok=True)
+        src = safe_path(args.get("archive")); dest = safe_path(args.get("output", "unzipped")); dest.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(src) as z:
             for member in z.infolist():
                 target = (dest / member.filename).resolve()
-                if target != WORKSPACE and WORKSPACE not in target.parents:
-                    raise ValueError("Unsafe ZIP path")
+                if target != WORKSPACE and WORKSPACE not in target.parents: raise ValueError("Unsafe ZIP path")
             z.extractall(dest)
         return {"ok": True, "path": str(dest.relative_to(WORKSPACE))}
     raise ValueError("Unknown file tool")
 
 
 def shell_tool(args):
-    if not SHELL_ENABLED:
-        raise RuntimeError("Shell is disabled. Set ENABLE_SHELL=1 to enable it.")
+    if not SHELL_ENABLED: raise RuntimeError("Shell is disabled. Set ENABLE_SHELL=1 to enable it.")
     command = args.get("command")
-    if isinstance(command, list):
-        argv = [str(x) for x in command]
+    if isinstance(command, list): argv = [str(x) for x in command]
     else:
         command = str(command or "").strip()
-        if not command:
-            raise ValueError("Missing command")
+        if not command: raise ValueError("Missing command")
         argv = ["/bin/sh", "-lc", command]
     proc = subprocess.run(argv, cwd=str(WORKSPACE), capture_output=True, text=True, timeout=SHELL_TIMEOUT)
     return {"ok": proc.returncode == 0, "command": command if not isinstance(command, list) else " ".join(argv), "exit_code": proc.returncode, "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
@@ -211,19 +185,16 @@ def shell_tool(args):
 
 def search_web(query, provider="duckduckgo", api_key=""):
     query = str(query or "").strip()
-    if not query:
-        raise ValueError("Missing search query")
+    if not query: raise ValueError("Missing search query")
     provider = (provider or "duckduckgo").lower()
     if provider == "brave" and api_key:
         url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": query, "count": 8})
         req = urllib.request.Request(url, headers={"Accept": "application/json", "X-Subscription-Token": api_key})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=20) as r: data = json.loads(r.read())
         return [{"title": item.get("title", ""), "url": item.get("url", ""), "snippet": item.get("description", "")} for item in data.get("web", {}).get("results", [])[:8]]
     url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
     req = urllib.request.Request(url, headers={"User-Agent": "JolgueAI/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        page = r.read().decode("utf-8", errors="ignore")
+    with urllib.request.urlopen(req, timeout=20) as r: page = r.read().decode("utf-8", errors="ignore")
     blocks = re.findall(r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.I | re.S)
     snippets = re.findall(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', page, re.I | re.S)
     results = []
@@ -241,14 +212,9 @@ def job_cancelled(job_id):
 
 
 def call_llm(payload, job_id):
-    p = payload.get("provider") or {}
-    base = (p.get("base_url") or "").rstrip("/")
-    key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", "")
-    model = p.get("model") or "meta/llama-3.1-8b-instruct"
-    if not base or not key:
-        raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
-    search_cfg = payload.get("search") or {}
-    search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
+    p = payload.get("provider") or {}; base = (p.get("base_url") or "").rstrip("/"); key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", ""); model = p.get("model") or "meta/llama-3.1-8b-instruct"
+    if not base or not key: raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
+    search_cfg = payload.get("search") or {}; search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
     system = f'''You are Jolgue AI, a normal conversational AI with a real workspace. You can create, edit, read, move, copy, delete, zip/unzip files, execute shell commands inside the workspace, and search the web.
 Available tools:
 - create_file(path,content)
@@ -264,35 +230,26 @@ Available tools:
 - web_search(query) — searches the public web. Current provider: {search_provider}.
 When using a tool, emit exactly one line: <tool>{{"name":"TOOL_NAME","args":{{...}}}}</tool>
 Use only workspace-relative file paths. Do not put tool markup in normal prose. After tools run, explain the result concisely and include useful filenames/URLs.'''
-    for s in payload.get("skills", []):
-        system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
+    for s in payload.get("skills", []): system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
     body = json.dumps({"model": model, "messages": [{"role": "system", "content": system}] + payload.get("messages", []), "temperature": 0.2, "stream": False}).encode("utf-8")
     req = urllib.request.Request(base + "/chat/completions", data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + key}, method="POST")
     response = None
     with JOBS_LOCK:
-        if job_id in JOBS:
-            JOBS[job_id]["response"] = None
+        if job_id in JOBS: JOBS[job_id]["response"] = None
     try:
         response = urllib.request.urlopen(req, timeout=180)
         with JOBS_LOCK:
-            if job_id in JOBS:
-                JOBS[job_id]["response"] = response
-        if job_cancelled(job_id):
-            response.close()
-            raise RuntimeError("Generation stopped")
+            if job_id in JOBS: JOBS[job_id]["response"] = response
+        if job_cancelled(job_id): response.close(); raise RuntimeError("Generation stopped")
         raw = response.read()
-        if job_cancelled(job_id):
-            raise RuntimeError("Generation stopped")
+        if job_cancelled(job_id): raise RuntimeError("Generation stopped")
         data = json.loads(raw)
         return data["choices"][0]["message"]["content"]
     finally:
         if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-        with JOBS_LOCK:
-            JOBS.pop(job_id, None)
+            try: response.close()
+            except Exception: pass
+        with JOBS_LOCK: JOBS.pop(job_id, None)
 
 
 def run_tools(text, search_cfg):
@@ -300,86 +257,50 @@ def run_tools(text, search_cfg):
     for raw in re.findall(r'<tool>\s*(\{.*?\})\s*</tool>', text, re.S):
         call = {}
         try:
-            call = json.loads(raw)
-            name = call["name"]
-            args = call.get("args", {})
-            if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}:
-                result = file_tool(name, args)
-            elif name == "shell":
-                result = shell_tool(args)
-            elif name == "web_search":
-                result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
-            else:
-                raise ValueError(f"Unknown tool: {name}")
+            call = json.loads(raw); name = call["name"]; args = call.get("args", {})
+            if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}: result = file_tool(name, args)
+            elif name == "shell": result = shell_tool(args)
+            elif name == "web_search": result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
+            else: raise ValueError(f"Unknown tool: {name}")
             results.append({"tool": name, **result})
-        except Exception as e:
-            results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(e)})
-    clean = re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', text, flags=re.S).strip()
-    return clean, results
+        except Exception as e: results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(e)})
+    return re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', text, flags=re.S).strip(), results
 
 
-LOGIN_HTML = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI — Login</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#212121;color:#eee;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(380px,calc(100% - 32px));background:#171717;border:1px solid #3d3d3d;border-radius:18px;padding:28px;box-sizing:border-box}.logo{width:44px;height:44px;border-radius:12px;background:#fff;color:#111;display:grid;place-items:center;font-weight:800;margin-bottom:18px}.title{font-size:25px;font-weight:650;margin-bottom:6px}.sub{color:#aaa;margin-bottom:22px}.field{width:100%;box-sizing:border-box;padding:12px;border:1px solid #454545;border-radius:10px;background:#212121;color:#eee;margin:7px 0;outline:none}.field:focus{border-color:#777}.btn{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:#fff;color:#111;font-weight:700;cursor:pointer}.err{min-height:18px;color:#ff7777;margin-top:10px}.hint{margin-top:15px;color:#777;font-size:12px;line-height:1.4}</style></head><body><form class="card" method="post" action="/api/login"><div class="logo">J</div><div class="title">Jolgue AI</div><div class="sub">Sign in to your private workspace.</div><input class="field" name="username" autocomplete="username" placeholder="Username" required><input class="field" type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="btn">Sign in</button><div class="err">{{ERROR}}</div><div class="hint">The workspace, shell and provider settings are protected by this login.</div></form></body></html>'''
+LOGIN_HTML = '''<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI — Entrar</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#212121;color:#eee;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(380px,calc(100% - 32px));background:#171717;border:1px solid #3d3d3d;border-radius:18px;padding:28px;box-sizing:border-box}.logo{width:44px;height:44px;border-radius:12px;background:#fff;color:#111;display:grid;place-items:center;font-weight:800;margin-bottom:18px}.title{font-size:25px;font-weight:650;margin-bottom:6px}.sub{color:#aaa;margin-bottom:22px}.field{width:100%;box-sizing:border-box;padding:12px;border:1px solid #454545;border-radius:10px;background:#212121;color:#eee;margin:7px 0;outline:none}.field:focus{border-color:#777}.btn{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:#fff;color:#111;font-weight:700;cursor:pointer}.err{min-height:18px;color:#ff7777;margin-top:10px}.hint{margin-top:15px;color:#777;font-size:12px;line-height:1.4}</style></head><body><form class="card" method="post" action="/api/login"><div class="logo">J</div><div class="title">Jolgue AI</div><div class="sub">Inicia sessão no teu workspace privado.</div><input class="field" name="username" autocomplete="username" placeholder="Utilizador" required><input class="field" type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="btn">Entrar</button><div class="err">{{ERROR}}</div><div class="hint">O workspace, shell e definições do provider ficam protegidos por esta sessão.</div></form></body></html>'''
 
 
 class H(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200):
-        b = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        b = json.dumps(obj, ensure_ascii=False).encode("utf-8"); self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def send_html(self, text, status=200):
-        b = text.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        b = text.encode("utf-8"); self.send_response(status); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def unauthorized(self):
-        self.send_response(401)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(LOGIN_HTML)))
-        self.end_headers()
-        self.wfile.write(LOGIN_HTML.encode("utf-8"))
+        body = LOGIN_HTML.replace("{{ERROR}}", ""); self.send_html(body, 401)
 
     def do_GET(self):
-        if self.path.startswith("/download?"):
-            if not require_auth(self):
-                self.unauthorized(); return
-            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            rel = qs.get("path", [""])[0]
-            try:
-                p = safe_path(rel)
-                if not p.is_file():
-                    self.send_json({"error": "File not found"}, 404); return
-                b = p.read_bytes(); name = p.name.replace('"', '')
-                self.send_response(200)
-                self.send_header("Content-Type", "application/zip" if p.suffix.lower() == ".zip" else "application/octet-stream")
-                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-                self.send_header("Content-Length", str(len(b)))
-                self.end_headers(); self.wfile.write(b)
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
-            return
+        if self.path == "/health": self.send_json({"ok": True, "service": "jolgue-ai"}); return
         if self.path == "/logout":
-            raw = self.headers.get("Cookie", ""); c = SimpleCookie(); c.load(raw or "")
-            token = c.get("jolgue_session")
+            raw = self.headers.get("Cookie", ""); c = SimpleCookie(); c.load(raw or ""); token = c.get("jolgue_session")
             if token:
                 with SESSIONS_LOCK: SESSIONS.pop(token.value, None)
             self.send_response(302); self.send_header("Set-Cookie", "jolgue_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"); self.send_header("Location", "/"); self.end_headers(); return
+        if self.path.startswith("/download?"):
+            if not require_auth(self): self.unauthorized(); return
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query); rel = qs.get("path", [""])[0]
+            try:
+                p = safe_path(rel)
+                if not p.is_file(): self.send_json({"error": "File not found"}, 404); return
+                b = p.read_bytes(); name = p.name.replace('"', "")
+                self.send_response(200); self.send_header("Content-Type", "application/zip" if p.suffix.lower() == ".zip" else "application/octet-stream"); self.send_header("Content-Disposition", f'attachment; filename="{name}"'); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+            except Exception as e: self.send_json({"error": str(e)}, 400)
+            return
         if self.path == "/":
-            if not require_auth(self):
-                self.send_html(LOGIN_HTML); return
-            p = TEMPLATES / "chat.html"; b = p.read_bytes()
-            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
-        if not require_auth(self):
-            self.unauthorized(); return
+            if not require_auth(self): self.send_html(LOGIN_HTML); return
+            p = TEMPLATES / "chat.html"; b = p.read_bytes(); self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+        if not require_auth(self): self.unauthorized(); return
         if self.path == "/api/state": self.send_json(load()); return
         if self.path == "/api/files": self.send_json({"files": list_files()}); return
         self.send_json({"error": "Not found"}, 404)
@@ -388,16 +309,12 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", "0")); raw = self.rfile.read(n)
         if self.path == "/api/login":
             try:
-                data = urllib.parse.parse_qs(raw.decode("utf-8", errors="ignore")); username = data.get("username", [""])[0]; password = data.get("password", [""])[0]
-                cfg = auth_config()
+                data = urllib.parse.parse_qs(raw.decode("utf-8", errors="ignore")); username = data.get("username", [""])[0]; password = data.get("password", [""])[0]; cfg = auth_config()
                 if secrets.compare_digest(username, cfg["username"]) and secrets.compare_digest(password, cfg["password"]):
-                    token = create_session(username)
-                    self.send_response(302); self.send_header("Set-Cookie", f"jolgue_session={token}; Max-Age={SESSION_TTL}; Path=/; HttpOnly; SameSite=Lax"); self.send_header("Location", "/"); self.end_headers(); return
-                self.send_html(LOGIN_HTML.replace("{{ERROR}}", "Invalid username or password."), 401); return
-            except Exception:
-                self.send_html(LOGIN_HTML.replace("{{ERROR}}", "Login failed."), 400); return
-        if self.path.startswith("/api/") and not require_auth(self):
-            self.send_json({"error": "Authentication required"}, 401); return
+                    token = create_session(username); self.send_response(302); self.send_header("Set-Cookie", f"jolgue_session={token}; Max-Age={SESSION_TTL}; Path=/; HttpOnly; SameSite=Lax"); self.send_header("Location", "/"); self.end_headers(); return
+                self.send_html(LOGIN_HTML.replace("{{ERROR}}", "Utilizador ou password inválidos."), 401); return
+            except Exception: self.send_html(LOGIN_HTML.replace("{{ERROR}}", "Falha no login."), 400); return
+        if self.path.startswith("/api/") and not require_auth(self): self.send_json({"error": "Authentication required"}, 401); return
         try: data = json.loads(raw or b"{}")
         except Exception: self.send_json({"error": "Invalid JSON"}, 400); return
         if self.path == "/api/state": DATA.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"); self.send_json({"ok": True}); return
