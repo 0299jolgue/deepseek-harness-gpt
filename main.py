@@ -1,9 +1,12 @@
+import html
 import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -16,6 +19,8 @@ WORKSPACE = ROOT / "workspace"
 TEMPLATES = ROOT / "templates"
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "80"))
+SHELL_ENABLED = os.getenv("ENABLE_SHELL", "1").lower() not in {"0", "false", "no"}
+SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "30"))
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
@@ -27,6 +32,10 @@ def defaults():
             "base_url": os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
             "model": os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"),
             "api_key": os.getenv("NVIDIA_API_KEY", ""),
+        },
+        "search": {
+            "provider": os.getenv("SEARCH_PROVIDER", "duckduckgo"),
+            "api_key": os.getenv("BRAVE_SEARCH_API_KEY", ""),
         },
         "chats": [],
         "skills": [],
@@ -71,6 +80,8 @@ def file_tool(name, args):
         return {"ok": True, "path": str(p.relative_to(WORKSPACE))}
     if name == "read_file":
         p = safe_path(args.get("path"))
+        if not p.is_file():
+            raise ValueError("File not found")
         return {"ok": True, "path": str(p.relative_to(WORKSPACE)), "content": p.read_text(encoding="utf-8")}
     if name == "delete_file":
         p = safe_path(args.get("path"))
@@ -109,7 +120,8 @@ def file_tool(name, args):
                 for p in src.rglob("*"):
                     if p.is_file() and p != dest:
                         z.write(p, p.relative_to(src))
-        return {"ok": True, "path": str(dest.relative_to(WORKSPACE))}
+        rel = str(dest.relative_to(WORKSPACE))
+        return {"ok": True, "path": rel, "download_url": "/download?path=" + urllib.parse.quote(rel)}
     if name == "unzip_files":
         src = safe_path(args.get("archive"))
         dest = safe_path(args.get("output", "unzipped"))
@@ -122,6 +134,62 @@ def file_tool(name, args):
             z.extractall(dest)
         return {"ok": True, "path": str(dest.relative_to(WORKSPACE))}
     raise ValueError("Unknown file tool")
+
+
+def shell_tool(args):
+    if not SHELL_ENABLED:
+        raise RuntimeError("Shell is disabled. Set ENABLE_SHELL=1 to enable it.")
+    command = args.get("command")
+    if isinstance(command, list):
+        argv = [str(x) for x in command]
+    else:
+        command = str(command or "").strip()
+        if not command:
+            raise ValueError("Missing command")
+        argv = ["/bin/sh", "-lc", command]
+    proc = subprocess.run(argv, cwd=str(WORKSPACE), capture_output=True, text=True, timeout=SHELL_TIMEOUT)
+    return {
+        "ok": proc.returncode == 0,
+        "command": command if not isinstance(command, list) else " ".join(argv),
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout[-12000:],
+        "stderr": proc.stderr[-12000:],
+    }
+
+
+def search_web(query, provider="duckduckgo", api_key=""):
+    query = str(query or "").strip()
+    if not query:
+        raise ValueError("Missing search query")
+    provider = (provider or "duckduckgo").lower()
+    if provider == "brave" and api_key:
+        url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": query, "count": 8})
+        req = urllib.request.Request(url, headers={"Accept": "application/json", "X-Subscription-Token": api_key})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        results = []
+        for item in data.get("web", {}).get("results", [])[:8]:
+            results.append({"title": item.get("title", ""), "url": item.get("url", ""), "snippet": item.get("description", "")})
+        return results
+
+    # Lightweight no-key fallback using DuckDuckGo's HTML results.
+    url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+    req = urllib.request.Request(url, headers={"User-Agent": "JolgueAI/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        page = r.read().decode("utf-8", errors="ignore")
+    blocks = re.findall(r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.I | re.S)
+    snippets = re.findall(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', page, re.I | re.S)
+    results = []
+    for i, (url0, title0) in enumerate(blocks[:8]):
+        title0 = re.sub(r"<.*?>", "", title0)
+        title0 = html.unescape(re.sub(r"\s+", " ", title0)).strip()
+        url0 = html.unescape(url0)
+        snippet = ""
+        if i < len(snippets):
+            snippet = html.unescape(re.sub(r"<.*?>", " ", snippets[i]))
+            snippet = re.sub(r"\s+", " ", snippet).strip()
+        results.append({"title": title0, "url": url0, "snippet": snippet})
+    return results
 
 
 def job_cancelled(job_id):
@@ -137,7 +205,24 @@ def call_llm(payload, job_id):
     model = p.get("model") or "meta/llama-3.1-8b-instruct"
     if not base or not key:
         raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
-    system = '''You are Jolgue AI, a normal conversational AI with a workspace. Be helpful and natural. You can create, edit, read, move, copy, delete and zip/unzip files. Available tools: create_file(path,content), write_file(path,content), read_file(path), delete_file(path), create_directory(path), move_file(source,destination), copy_file(source,destination), zip_files(source,output), unzip_files(archive,output). When you need a file operation, emit exactly one line using <tool>{"name":"create_file","args":{"path":"example.py","content":"print(1)"}}</tool>. Use only workspace-relative paths. After tools are executed, explain what changed clearly.'''
+    search_cfg = payload.get("search") or {}
+    search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
+    search_key = search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", "")
+    system = f'''You are Jolgue AI, a normal conversational AI with a real workspace. You can create, edit, read, move, copy, delete, zip/unzip files, execute shell commands inside the workspace, and search the web.
+Available tools:
+- create_file(path,content)
+- write_file(path,content)
+- read_file(path)
+- delete_file(path)
+- create_directory(path)
+- move_file(source,destination)
+- copy_file(source,destination)
+- zip_files(source,output) — this creates a downloadable archive; always mention the returned file when done.
+- unzip_files(archive,output)
+- shell(command) — runs with the workspace as cwd. Use it for builds, tests, package tools, git commands and other development tasks.
+- web_search(query) — searches the public web and returns titles, snippets and URLs. Current search provider: {search_provider}.
+When using a tool, emit exactly one line: <tool>{{"name":"TOOL_NAME","args":{{...}}}}</tool>
+Use only workspace-relative file paths. Do not put tool markup in normal prose. After tools run, explain the result concisely and include useful filenames/URLs. For shell commands, prefer focused commands and report stdout/stderr or failures.'''
     for s in payload.get("skills", []):
         system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
     body = json.dumps({
@@ -179,16 +264,25 @@ def call_llm(payload, job_id):
             JOBS.pop(job_id, None)
 
 
-def run_tools(text):
+def run_tools(text, search_cfg):
     results = []
-    clean = text
     for raw in re.findall(r'<tool>\s*(\{.*?\})\s*</tool>', text, re.S):
         try:
-            c = json.loads(raw)
-            results.append(file_tool(c["name"], c.get("args", {})))
+            call = json.loads(raw)
+            name = call["name"]
+            args = call.get("args", {})
+            if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}:
+                result = file_tool(name, args)
+            elif name == "shell":
+                result = shell_tool(args)
+            elif name == "web_search":
+                result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
+            else:
+                raise ValueError(f"Unknown tool: {name}")
+            results.append({"tool": name, **result})
         except Exception as e:
-            results.append({"ok": False, "error": str(e)})
-    clean = re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', clean, flags=re.S).strip()
+            results.append({"tool": call.get("name", "unknown") if isinstance(locals().get("call"), dict) else "unknown", "ok": False, "error": str(e)})
+    clean = re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', text, flags=re.S).strip()
     return clean, results
 
 
@@ -218,6 +312,25 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/files":
             self.send_json({"files": list_files()})
             return
+        if self.path.startswith("/download?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            rel = qs.get("path", [""])[0]
+            try:
+                p = safe_path(rel)
+                if not p.is_file():
+                    self.send_json({"error": "File not found"}, 404)
+                    return
+                b = p.read_bytes()
+                name = p.name.replace('"', "")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip" if p.suffix.lower() == ".zip" else "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
+            return
         self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self):
@@ -237,6 +350,24 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/files":
             try:
                 self.send_json(file_tool(data.get("name"), data.get("args", {})))
+            except Exception as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
+        if self.path == "/api/search":
+            try:
+                cfg = data.get("search") or {}
+                results = search_web(cfg.get("query", ""), cfg.get("provider", "duckduckgo"), cfg.get("api_key", ""))
+                self.send_json({"query": cfg.get("query", ""), "results": results})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 502)
+            return
+
+        if self.path == "/api/shell":
+            try:
+                self.send_json(shell_tool(data))
+            except subprocess.TimeoutExpired:
+                self.send_json({"error": f"Command timed out after {SHELL_TIMEOUT}s"}, 408)
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
             return
@@ -267,7 +398,8 @@ class H(BaseHTTPRequestHandler):
                 if job_cancelled(job_id):
                     self.send_json({"stopped": True, "content": "Generation stopped.", "tools": [], "files": list_files()}, 499)
                     return
-                clean, tools = run_tools(content)
+                search_cfg = data.get("search") or {}
+                clean, tools = run_tools(content, search_cfg)
                 self.send_json({"content": clean, "tools": tools, "files": list_files(), "job_id": job_id})
             except RuntimeError as e:
                 if "stopped" in str(e).lower() or job_cancelled(job_id):
