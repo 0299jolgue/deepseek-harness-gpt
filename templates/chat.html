@@ -1,28 +1,121 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-PT">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Jolgue AI</title>
 <style>
-*{box-sizing:border-box}body{margin:0;font:14px system-ui;background:#090b0f;color:#eef0f4}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.side{background:#10131a;border-right:1px solid #222733;padding:16px;overflow:auto}.brand{font-size:20px;font-weight:800;margin-bottom:18px}.label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#737c8c;margin:16px 2px 7px}.button,.chat-item{width:100%;display:block;text-align:left;padding:10px;border:1px solid transparent;border-radius:9px;background:transparent;color:#bbc2cf;margin:3px 0;cursor:pointer}.button:hover,.chat-item:hover,.chat-item.active{background:#181c25;color:#fff}.main{display:flex;flex-direction:column;min-width:0}.top{height:60px;border-bottom:1px solid #222733;padding:0 22px;display:flex;align-items:center;justify-content:space-between}.sub{font-size:12px;color:#7f8796}.content{display:grid;grid-template-columns:1fr 300px;min-height:calc(100vh - 60px)}.chat{display:flex;flex-direction:column;min-width:0}.messages{flex:1;overflow:auto;padding:28px;max-width:960px;width:100%;margin:auto}.welcome{text-align:center;padding:55px 10px;color:#798292}.msg{max-width:820px;padding:13px 15px;border-radius:13px;margin:12px auto;white-space:pre-wrap;line-height:1.55}.user{background:#202633}.assistant{background:#151922}.composer{display:flex;gap:9px;padding:16px;max-width:960px;width:100%;margin:auto}.composer textarea{flex:1;resize:none;min-height:56px;background:#11151d;color:#fff;border:1px solid #303644;border-radius:12px;padding:13px}.send,.primary{background:#fff;color:#0a0b0e;border:0;border-radius:10px;padding:9px 12px;font-weight:700;cursor:pointer}.send{width:82px}.panel{border-left:1px solid #222733;padding:18px;background:#0d1015;overflow:auto}.card{background:#11151c;border:1px solid #252b37;border-radius:13px;padding:14px;margin-bottom:12px}.card h3{margin:0 0 9px;font-size:14px}.field{width:100%;margin:6px 0;padding:9px 10px;background:#0f131a;color:#fff;border:1px solid #2a303c;border-radius:9px}.file{font-size:12px;color:#aab2c0;padding:5px 2px;border-bottom:1px solid #1d222c}.small{font-size:11px;color:#727b8b}@media(max-width:900px){.content{grid-template-columns:1fr}.panel{display:none}}@media(max-width:650px){.app{grid-template-columns:1fr}.side{display:none}}
+:root{--bg:#fff;--surface:#f7f7f8;--surface-2:#ececf1;--text:#0d0d0d;--muted:#6e6e80;--border:#e5e5e5;--hover:#ececec;--accent:#10a37f;--danger:#b42318;--sidebar:#f7f7f8;--shadow:0 1px 2px rgba(0,0,0,.05)}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden}button,input,textarea{font:inherit}button{border:0;background:none;color:inherit;cursor:pointer}.hidden{display:none!important}
+.app{height:100%;display:flex;background:var(--bg)}
+.sidebar{width:260px;flex:0 0 260px;background:var(--sidebar);display:flex;flex-direction:column;border-right:1px solid #ececef;transition:width .2s ease,transform .2s ease;z-index:20}
+.sidebar-top{padding:12px}.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.brand{font-weight:700;font-size:15px;padding:8px 10px}.icon-btn{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:#555}.icon-btn:hover{background:var(--hover)}.new-chat{width:100%;display:flex;align-items:center;gap:11px;padding:10px 11px;border-radius:9px;font-weight:600}.new-chat:hover{background:var(--hover)}.new-chat span:first-child{font-size:22px;font-weight:400;line-height:1}.search{margin:5px 0 10px;position:relative}.search input{width:100%;border:1px solid transparent;background:transparent;border-radius:8px;padding:9px 10px 9px 33px;outline:none;color:var(--text)}.search input:hover,.search input:focus{background:#ececf1}.search svg{position:absolute;left:10px;top:10px;color:#767676}
+.chat-scroll{padding:0 8px;overflow:auto;flex:1}.section-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#8a8a94;font-weight:600;padding:11px 10px 6px}.chat-item{width:100%;display:flex;align-items:center;text-align:left;gap:8px;padding:9px 10px;border-radius:8px;color:#2d2d2d}.chat-item:hover{background:var(--hover)}.chat-item.active{background:#ececec;font-weight:600}.chat-item .chat-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}.empty{color:var(--muted);font-size:12px;padding:8px 10px}.sidebar-bottom{padding:10px;border-top:1px solid #e9e9ea}.account{display:flex;align-items:center;gap:10px;padding:9px;border-radius:9px}.account:hover{background:var(--hover)}.avatar{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#171717;color:#fff;font-size:12px;font-weight:700}.account-text{min-width:0;flex:1}.account-name{font-weight:600;font-size:13px}.account-sub{color:var(--muted);font-size:11px}.dots{color:#777}
+.main{min-width:0;flex:1;height:100%;display:flex;flex-direction:column;position:relative}.header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;position:relative;z-index:5}.header-left,.header-right{display:flex;align-items:center;gap:6px}.mobile-menu{display:none}.model-picker{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:9px;font-weight:600;font-size:15px}.model-picker:hover{background:var(--surface)}.chevron{font-size:12px;color:#777}.status{font-size:11px;color:var(--muted);padding:0 7px}.workspace-btn{font-size:12px;padding:7px 10px;border:1px solid var(--border);border-radius:8px}.workspace-btn:hover{background:var(--surface)}
+.content{flex:1;min-height:0;display:flex}.chat-area{flex:1;min-width:0;display:flex;flex-direction:column}.messages{flex:1;overflow:auto;padding:20px 0 28px;scroll-behavior:smooth}.message-row{width:100%;display:flex;justify-content:center}.message-inner{width:min(768px,calc(100% - 32px));display:flex;gap:14px;padding:16px 0}.message-row.user .message-inner{justify-content:flex-end}.message-bubble{max-width:calc(100% - 48px);border-radius:18px;padding:11px 15px;white-space:pre-wrap;word-break:break-word}.message-row.user .message-bubble{background:#f4f4f4}.message-row.assistant .message-bubble{padding-left:0;padding-right:0}.message-avatar{width:30px;height:30px;flex:0 0 30px;display:grid;place-items:center;border-radius:7px;font-size:12px;font-weight:700}.assistant-avatar{background:#000;color:#fff}.user-avatar{background:#d1d1d1;color:#222}.message-copy{min-width:0;flex:1}.message-label{font-size:12px;font-weight:600;margin:3px 0 6px;color:#3b3b3b}.message-actions{display:flex;gap:2px;margin-top:6px}.message-actions button{font-size:12px;color:#8a8a8a;border-radius:6px;padding:4px 7px}.message-actions button:hover{background:var(--surface-2);color:#444}.welcome{min-height:100%;display:flex;align-items:center;justify-content:center;padding:40px 20px 20px}.welcome-inner{width:min(768px,100%);text-align:center;margin-top:-8vh}.welcome h1{font-size:30px;line-height:1.2;margin:0 0 28px;font-weight:600;letter-spacing:-.02em}.suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;max-width:720px;margin:0 auto}.suggestion{padding:13px 15px;border:1px solid var(--border);border-radius:12px;text-align:left;background:#fff;box-shadow:var(--shadow)}.suggestion:hover{background:var(--surface)}.suggestion-title{font-weight:600;margin-bottom:2px}.suggestion-text{color:var(--muted);font-size:12px}
+.composer-wrap{padding:8px 16px 18px;background:linear-gradient(to top,var(--bg) 72%,transparent)}.composer{width:min(768px,100%);margin:0 auto}.composer-box{position:relative;border:1px solid #c9c9cf;background:#fff;border-radius:22px;box-shadow:0 2px 8px rgba(0,0,0,.05);padding:10px 12px 10px}.composer-box:focus-within{border-color:#a9a9af;box-shadow:0 2px 12px rgba(0,0,0,.08)}.composer textarea{display:block;width:100%;min-height:26px;max-height:180px;resize:none;border:0;outline:0;background:transparent;padding:3px 4px 8px;font-size:15px;line-height:1.45}.composer-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.composer-tools{display:flex;gap:2px}.tool-btn{height:34px;min-width:34px;border-radius:9px;display:grid;place-items:center;color:#62626a}.tool-btn:hover{background:var(--surface)}.attach{border:1px solid #d7d7db;border-radius:50%;font-size:17px}.send-btn{width:34px;height:34px;border-radius:50%;background:#000;color:#fff;display:grid;place-items:center}.send-btn:disabled{background:#d8d8da;color:#fff;cursor:default}.disclaimer{text-align:center;color:#8a8a8f;font-size:11px;padding-top:8px}
+.right-panel{width:320px;flex:0 0 320px;border-left:1px solid #ececef;background:#fafafa;padding:18px;overflow:auto}.panel-title{font-weight:650;font-size:14px;margin-bottom:12px}.card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px}.card-title{font-weight:600;font-size:13px;margin-bottom:9px}.field{display:block;width:100%;margin:7px 0;padding:9px 10px;border:1px solid #d8d8dc;border-radius:8px;outline:none;background:#fff}.field:focus{border-color:#aaa}.save{width:100%;padding:9px 10px;border-radius:8px;background:#111;color:#fff;font-weight:600;margin-top:4px}.save:hover{background:#2c2c2c}.file-list{max-height:280px;overflow:auto}.file{padding:7px 0;border-bottom:1px solid #eee;font-size:12px;word-break:break-all}.file:last-child{border-bottom:0}.muted{color:var(--muted);font-size:12px}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:10px 14px;border-radius:10px;font-size:12px;z-index:100;opacity:0;pointer-events:none;transition:opacity .15s}.toast.show{opacity:1}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.22);z-index:15}.overlay.show{display:block}
+@media(max-width:1050px){.right-panel{display:none}}@media(max-width:700px){.sidebar{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);box-shadow:8px 0 28px rgba(0,0,0,.12)}.sidebar.open{transform:translateX(0)}.mobile-menu{display:grid}.overlay.show{display:block}.header{height:52px;padding:0 8px}.header-right .status{display:none}.model-picker{font-size:14px}.message-inner{width:calc(100% - 22px);gap:10px}.suggestions{grid-template-columns:1fr}.welcome h1{font-size:26px}.composer-wrap{padding:7px 9px 12px}.composer-box{border-radius:20px}.disclaimer{font-size:10px}.message-bubble{max-width:calc(100% - 38px)}}
+@media(prefers-color-scheme:dark){:root{--bg:#212121;--surface:#2f2f2f;--surface-2:#3a3a3a;--text:#ececec;--muted:#a5a5a5;--border:#444;--hover:#2c2c2c;--sidebar:#171717}.sidebar{border-right-color:#303030}.new-chat:hover,.chat-item:hover,.chat-item.active,.icon-btn:hover{background:#2b2b2b}.search input:hover,.search input:focus{background:#2d2d2d}.sidebar-bottom{border-top-color:#303030}.avatar{background:#eee;color:#111}.suggestion,.composer-box,.card{background:#212121;border-color:#454545}.suggestion:hover{background:#2b2b2b}.message-row.user .message-bubble{background:#2f2f2f}.right-panel{background:#181818;border-left-color:#303030}.field{background:#212121;border-color:#454545;color:#eee}.save{background:#fff;color:#111}.file{border-bottom-color:#303030}.tool-btn:hover{background:#303030}.disclaimer{color:#929292}}
 </style>
 </head>
-<body><div class="app">
-<aside class="side"><div class="brand">Jolgue AI</div><button class="button" onclick="newChat()">＋ New chat</button><div class="label">Chats</div><div id="chats"></div><div class="label">Workspace</div><div class="small">Files created by the AI appear here.</div><div id="files"></div></aside>
-<main class="main"><header class="top"><div><b id="title">New chat</b><div class="sub">Normal chat · workspace enabled</div></div><div class="sub" id="status">Ready</div></header>
-<div class="content"><section class="chat"><div id="messages" class="messages"><div class="welcome"><h2>Jolgue AI</h2><p>Ask normally. The AI can create, edit, read, delete, zip and unzip workspace files.</p></div></div><div class="composer"><textarea id="input" placeholder="Message..."></textarea><button class="send" onclick="send()">Send</button></div></section>
-<aside class="panel"><div class="card"><h3>Provider</h3><input class="field" id="base" placeholder="Base URL"><input class="field" id="model" placeholder="Model"><input class="field" id="key" placeholder="API key" type="password"><button class="primary" onclick="saveProvider()">Save</button></div><div class="card"><h3>Workspace</h3><div class="small">Supported operations</div><div class="file">Create / write files</div><div class="file">Read / delete files</div><div class="file">ZIP / unzip</div></div></aside></div></main></div>
+<body>
+<div class="app">
+  <div class="overlay" id="overlay" onclick="toggleSidebar(false)"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand-row">
+        <div class="brand">Jolgue AI</div>
+        <button class="icon-btn" title="Fechar" onclick="toggleSidebar(false)">×</button>
+      </div>
+      <button class="new-chat" onclick="newChat()"><span>＋</span><span>New chat</span></button>
+      <div class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="6"></circle><path d="m16 16 5 5"></path></svg><input id="chatSearch" placeholder="Search chats" oninput="renderChats()"></div>
+    </div>
+    <div class="chat-scroll">
+      <div class="section-label">Chats</div>
+      <div id="chats"></div>
+      <div class="section-label">Workspace</div>
+      <div class="empty">Files created by the AI appear here.</div>
+      <div id="files"></div>
+    </div>
+    <div class="sidebar-bottom">
+      <div class="account"><div class="avatar">J</div><div class="account-text"><div class="account-name">Jolgue AI</div><div class="account-sub">Local workspace</div></div><div class="dots">•••</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="header">
+      <div class="header-left">
+        <button class="icon-btn mobile-menu" onclick="toggleSidebar(true)" title="Menu"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+        <button class="model-picker" title="Modelo"><span id="modelName">Jolgue AI</span><span class="chevron">⌄</span></button>
+      </div>
+      <div class="header-right"><span class="status" id="status">Ready</span><button class="workspace-btn" onclick="togglePanel()">Workspace</button></div>
+    </header>
+
+    <div class="content">
+      <section class="chat-area">
+        <div class="messages" id="messages"></div>
+        <div class="composer-wrap">
+          <div class="composer">
+            <div class="composer-box">
+              <textarea id="input" rows="1" placeholder="Message Jolgue AI..."></textarea>
+              <div class="composer-row">
+                <div class="composer-tools">
+                  <button class="tool-btn attach" title="Attach">＋</button>
+                  <button class="tool-btn" title="Tools" onclick="showToast('Workspace tools are available to the AI')">☷</button>
+                </div>
+                <button id="send" class="send-btn" onclick="send()" disabled title="Send"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5"></path><path d="m6 11 6-6 6 6"></path></svg></button>
+              </div>
+            </div>
+            <div class="disclaimer">Jolgue AI can make mistakes. Check important information.</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="right-panel" id="rightPanel">
+        <div class="panel-title">Workspace & settings</div>
+        <div class="card">
+          <div class="card-title">Provider</div>
+          <input class="field" id="base" placeholder="Base URL">
+          <input class="field" id="model" placeholder="Model">
+          <input class="field" id="key" placeholder="API key" type="password">
+          <button class="save" onclick="saveProvider()">Save</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Workspace</div>
+          <div class="muted" style="margin-bottom:8px">The AI can create, edit, read, delete, zip and unzip files.</div>
+          <div id="panelFiles" class="file-list"></div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
 <script>
 const S={data:null,chat:null};
+const $=id=>document.getElementById(id);
 async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return r.json()}
 function esc(s=''){return String(s).replace(/[&<>\"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[x]))}
-async function load(){S.data=await api('/api/state');S.chat=S.data.chats[0]||null;document.getElementById('base').value=S.data.provider?.base_url||'';document.getElementById('model').value=S.data.provider?.model||'';render();refreshFiles()}
-function render(){const chats=S.data?.chats||[];document.getElementById('chats').innerHTML=chats.map(c=>`<button class="chat-item ${S.chat?.id===c.id?'active':''}" onclick="pickChat('${esc(c.id)}')">${esc(c.title||'New chat')}</button>`).join('');document.getElementById('title').textContent=S.chat?.title||'New chat';const msgs=S.chat?.messages||[];document.getElementById('messages').innerHTML=msgs.length?msgs.map(m=>`<div class="msg ${m.role==='user'?'user':'assistant'}"><b>${m.role==='user'?'You':'AI'}</b><br>${esc(m.content)}</div>`).join(''):`<div class="welcome"><h2>Jolgue AI</h2><p>Ask normally. Files can be managed directly in the workspace.</p></div>`;}
-function pickChat(id){S.chat=S.data.chats.find(c=>c.id===id);render()}
-async function newChat(){const c={id:crypto.randomUUID(),title:'New chat',messages:[]};S.data.chats.unshift(c);S.chat=c;await save();render()}
+function showToast(t){const x=$('toast');x.textContent=t;x.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>x.classList.remove('show'),1800)}
+function toggleSidebar(open){$('sidebar').classList.toggle('open',open);$('overlay').classList.toggle('show',open)}
+function togglePanel(){const p=$('rightPanel');p.style.display=p.style.display==='block'?'none':'block'}
+function autoGrow(){const i=$('input');i.style.height='auto';i.style.height=Math.min(i.scrollHeight,180)+'px';$('send').disabled=!i.value.trim()||!S.chat}
+function welcome(){return `<div class="welcome"><div class="welcome-inner"><h1>What can I help you with?</h1><div class="suggestions"><button class="suggestion" onclick="fillPrompt('Create a small Python project with a main.py file')"><div class="suggestion-title">Create something</div><div class="suggestion-text">Build files and code in the workspace</div></button><button class="suggestion" onclick="fillPrompt('Explain this project and suggest improvements')"><div class="suggestion-title">Explore ideas</div><div class="suggestion-text">Discuss code, projects and architecture</div></button><button class="suggestion" onclick="fillPrompt('Read the workspace and summarize the files')"><div class="suggestion-title">Work with files</div><div class="suggestion-text">Read, edit, organize and package files</div></button><button class="suggestion" onclick="fillPrompt('Help me debug my project')"><div class="suggestion-title">Debug code</div><div class="suggestion-text">Find issues and explain how to fix them</div></button></div></div></div>`}
+function fillPrompt(t){$('input').value=t;autoGrow();$('input').focus()}
+function renderChats(){const chats=S.data?.chats||[];const q=($('chatSearch').value||'').toLowerCase();$('chats').innerHTML=chats.filter(c=>(c.title||'New chat').toLowerCase().includes(q)).map(c=>`<button class="chat-item ${S.chat?.id===c.id?'active':''}" onclick="pickChat('${esc(c.id)}')"><span class="chat-name">${esc(c.title||'New chat')}</span></button>`).join('')||'<div class="empty">No chats yet.</div>'}
+function renderMessages(){const msgs=S.chat?.messages||[];if(!msgs.length){$('messages').innerHTML=welcome();return}$('messages').innerHTML=msgs.map((m,idx)=>{const user=m.role==='user';return `<div class="message-row ${user?'user':'assistant'}"><div class="message-inner"><div class="message-avatar ${user?'user-avatar':'assistant-avatar'}">${user?'J':'AI'}</div><div class="message-copy"><div class="message-label">${user?'You':'Jolgue AI'}</div><div class="message-bubble">${esc(m.content)}</div>${!user?`<div class="message-actions"><button onclick="copyMessage(${idx})">Copy</button><button onclick="showToast('Response saved in this chat')">⋯</button></div>`:''}</div></div></div>`}).join('');$('messages').scrollTop=$('messages').scrollHeight}
+function render(){renderChats();renderMessages();$('modelName').textContent=S.data?.provider?.model||'Jolgue AI';$('base').value=S.data?.provider?.base_url||'';$('model').value=S.data?.provider?.model||'';$('key').value='';autoGrow()}
+async function load(){S.data=await api('/api/state');S.chat=S.data.chats[0]||null;render();await refreshFiles()}
+async function pickChat(id){S.chat=S.data.chats.find(c=>c.id===id);render();toggleSidebar(false)}
+async function newChat(){const c={id:crypto.randomUUID(),title:'New chat',messages:[]};S.data.chats.unshift(c);S.chat=c;await save();render();toggleSidebar(false);$('input').focus()}
 async function save(){await api('/api/state','POST',S.data)}
-async function send(){const i=document.getElementById('input'),text=i.value.trim();if(!text)return;if(!S.chat)await newChat();i.value='';S.chat.messages.push({role:'user',content:text});if(S.chat.title==='New chat')S.chat.title=text.slice(0,40)||'Chat';document.getElementById('status').textContent='Thinking…';render();const r=await api('/api/chat','POST',{messages:S.chat.messages,provider:S.data.provider,skills:S.data.skills});S.chat.messages.push({role:'assistant',content:r.content||r.error||'No response'});await save();document.getElementById('status').textContent=r.error?'Error':'Ready';render();refreshFiles()}
-function saveProvider(){S.data.provider.base_url=document.getElementById('base').value.trim();S.data.provider.model=document.getElementById('model').value.trim();S.data.provider.api_key=document.getElementById('key').value.trim();save()}
-async function refreshFiles(){const r=await api('/api/files');document.getElementById('files').innerHTML=(r.files||[]).map(f=>`<div class="file">${esc(f.path)}</div>`).join('')}
-document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});load();
-</script></body></html>
+async function send(){const i=$('input'),text=i.value.trim();if(!text)return;if(!S.chat)await newChat();i.value='';autoGrow();S.chat.messages.push({role:'user',content:text});if(S.chat.title==='New chat')S.chat.title=text.slice(0,48)||'Chat';$('status').textContent='Thinking…';render();try{const r=await api('/api/chat','POST',{messages:S.chat.messages,provider:S.data.provider,skills:S.data.skills});S.chat.messages.push({role:'assistant',content:r.content||r.error||'No response'});$('status').textContent=r.error?'Error':'Ready';if(r.error)showToast(r.error);await save();render();refreshFiles()}catch(e){$('status').textContent='Error';showToast(e.message||'Request failed')}}
+async function saveProvider(){S.data.provider.base_url=$('base').value.trim();S.data.provider.model=$('model').value.trim();const k=$('key').value.trim();if(k)S.data.provider.api_key=k;await save();$('modelName').textContent=S.data.provider.model||'Jolgue AI';showToast('Provider saved')}
+async function refreshFiles(){const r=await api('/api/files');const html=(r.files||[]).map(f=>`<div class="file">${esc(f.path)}</div>`).join('')||'<div class="muted">No files yet.</div>';if($('files'))$('files').innerHTML=(r.files||[]).map(f=>`<div class="file">${esc(f.path)}</div>`).join('');if($('panelFiles'))$('panelFiles').innerHTML=html}
+async function copyMessage(idx){const m=S.chat?.messages?.[idx];if(m)try{await navigator.clipboard.writeText(m.content);showToast('Copied')}catch{showToast('Could not copy')}}
+$('input').addEventListener('input',autoGrow);$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(!$('send').disabled)send()}});load();
+</script>
+</body>
+</html>
