@@ -24,10 +24,8 @@ TEMPLATES = ROOT / "templates"
 HOST = "0.0.0.0"
 PORT = 80
 SHELL_ENABLED = os.getenv("ENABLE_SHELL", "1").lower() not in {"0", "false", "no"}
-# 0 means no timeout. Long-running commands are allowed to finish.
 SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "0"))
 SESSION_TTL = int(os.getenv("SESSION_TTL", "86400"))
-# 0 means unlimited agent steps. The agent stops naturally when it has no more tool calls.
 MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "0"))
 JOB_RETENTION = int(os.getenv("JOB_RETENTION", "86400"))
 
@@ -40,8 +38,8 @@ SESSIONS_LOCK = threading.Lock()
 def defaults():
     return {
         "provider": {
-            "base_url": os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-            "model": os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"),
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "model": "deepseek-ai/deepseek-v4-flash-0731",
             "api_key": os.getenv("NVIDIA_API_KEY", ""),
         },
         "search": {
@@ -212,13 +210,7 @@ def shell_tool(args):
     if SHELL_TIMEOUT > 0:
         kwargs["timeout"] = SHELL_TIMEOUT
     proc = subprocess.run(argv, **kwargs)
-    return {
-        "ok": proc.returncode == 0,
-        "command": display_command,
-        "exit_code": proc.returncode,
-        "stdout": proc.stdout[-12000:],
-        "stderr": proc.stderr[-12000:],
-    }
+    return {"ok": proc.returncode == 0, "command": display_command, "exit_code": proc.returncode, "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
 
 
 def search_web(query, provider="duckduckgo", api_key=""):
@@ -264,12 +256,11 @@ def call_llm(payload, job_id):
     p = payload.get("provider") or {}
     base = (p.get("base_url") or "").rstrip("/")
     key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", "")
-    model = p.get("model") or "meta/llama-3.1-8b-instruct"
+    model = p.get("model") or "deepseek-ai/deepseek-v4-flash-0731"
     if not base or not key:
         raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
     search_cfg = payload.get("search") or {}
-    search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
-    system = f'''You are Jolgue AI, an autonomous conversational and coding agent with a real workspace.
+    system = '''You are Jolgue AI, an autonomous conversational and coding agent with a real workspace.
 
 You have actual tools, and you should decide yourself when to use them. Do not merely describe what you would do when a tool can do it.
 - Use shell when you need to inspect, run, debug, install, build, test, transform, or otherwise operate on files/programs in the workspace.
@@ -295,7 +286,7 @@ Available tools:
 - web_search(query) — searches the public web and has no client-side timeout.
 
 When using a tool, emit exactly one line per tool call in this format:
-<tool>{{"name":"TOOL_NAME","args":{{...}}}}</tool>
+<tool>{"name":"TOOL_NAME","args":{...}}</tool>
 
 Use only workspace-relative file paths. Tool markup is for execution and must not be used as normal prose. After all needed tools finish, answer the user normally and summarize the actual work/results.'''
     for s in payload.get("skills", []):
@@ -382,30 +373,11 @@ def cleanup_jobs():
 
 def active_jobs_for(username):
     with JOBS_LOCK:
-        return [
-            {
-                "job_id": job_id,
-                "status": job.get("status"),
-                "phase": job.get("phase"),
-                "step": job.get("step", 0),
-                "created": job.get("created"),
-                "updated": job.get("updated"),
-            }
-            for job_id, job in JOBS.items()
-            if job.get("username") == username and job.get("status") == "running"
-        ]
+        return [{"job_id": job_id, "status": job.get("status"), "phase": job.get("phase"), "step": job.get("step", 0), "created": job.get("created"), "updated": job.get("updated")} for job_id, job in JOBS.items() if job.get("username") == username and job.get("status") == "running"]
 
 
 def job_public(job):
-    result = {
-        "job_id": job["job_id"],
-        "status": job.get("status"),
-        "phase": job.get("phase"),
-        "step": job.get("step", 0),
-        "tools": job.get("tools", []),
-        "files": list_files(),
-        "updated": job.get("updated"),
-    }
+    result = {"job_id": job["job_id"], "status": job.get("status"), "phase": job.get("phase"), "step": job.get("step", 0), "tools": job.get("tools", []), "files": list_files(), "updated": job.get("updated")}
     if job.get("status") == "completed":
         result["content"] = job.get("content", "")
         result["steps"] = job.get("steps", 0)
@@ -464,8 +436,7 @@ class H(BaseHTTPRequestHandler):
             pass
 
     def unauthorized(self):
-        body = LOGIN_HTML.replace("{{ERROR}}", "")
-        self.send_html(body, 401)
+        self.send_html(LOGIN_HTML.replace("{{ERROR}}", ""), 401)
 
     def do_GET(self):
         cleanup_jobs()
@@ -628,20 +599,8 @@ class H(BaseHTTPRequestHandler):
             job_id = str(data.get("job_id") or uuid.uuid4())
             now = time.time()
             with JOBS_LOCK:
-                JOBS[job_id] = {
-                    "job_id": job_id,
-                    "username": username,
-                    "cancelled": False,
-                    "status": "running",
-                    "phase": "queued",
-                    "step": 0,
-                    "created": now,
-                    "updated": now,
-                    "content": "",
-                    "tools": [],
-                }
+                JOBS[job_id] = {"job_id": job_id, "username": username, "cancelled": False, "status": "running", "phase": "queued", "step": 0, "created": now, "updated": now, "content": "", "tools": []}
             threading.Thread(target=run_job, args=(job_id, data), daemon=True, name=f"jolgue-job-{job_id[:8]}").start()
-            # Return immediately. The agent is now independent of this browser request.
             self.send_json({"ok": True, "job_id": job_id, "status": "running"})
             return
         self.send_json({"error": "Not found"}, 404)
