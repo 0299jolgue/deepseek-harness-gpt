@@ -26,6 +26,7 @@ PORT = int(os.getenv("PORT", "80"))
 SHELL_ENABLED = os.getenv("ENABLE_SHELL", "1").lower() not in {"0", "false", "no"}
 SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "30"))
 SESSION_TTL = int(os.getenv("SESSION_TTL", "86400"))
+MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "8"))
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
@@ -174,13 +175,19 @@ def file_tool(name, args):
 def shell_tool(args):
     if not SHELL_ENABLED: raise RuntimeError("Shell is disabled. Set ENABLE_SHELL=1 to enable it.")
     command = args.get("command")
-    if isinstance(command, list): argv = [str(x) for x in command]
+    if isinstance(command, list):
+        argv = [str(x) for x in command]
+        display_command = " ".join(argv)
     else:
         command = str(command or "").strip()
         if not command: raise ValueError("Missing command")
         argv = ["/bin/sh", "-lc", command]
-    proc = subprocess.run(argv, cwd=str(WORKSPACE), capture_output=True, text=True, timeout=SHELL_TIMEOUT)
-    return {"ok": proc.returncode == 0, "command": command if not isinstance(command, list) else " ".join(argv), "exit_code": proc.returncode, "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
+        display_command = command
+    try:
+        proc = subprocess.run(argv, cwd=str(WORKSPACE), capture_output=True, text=True, timeout=SHELL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "command": display_command, "exit_code": -1, "stdout": "", "stderr": f"Command timed out after {SHELL_TIMEOUT}s"}
+    return {"ok": proc.returncode == 0, "command": display_command, "exit_code": proc.returncode, "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
 
 
 def search_web(query, provider="duckduckgo", api_key=""):
@@ -212,10 +219,24 @@ def job_cancelled(job_id):
 
 
 def call_llm(payload, job_id):
-    p = payload.get("provider") or {}; base = (p.get("base_url") or "").rstrip("/"); key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", ""); model = p.get("model") or "meta/llama-3.1-8b-instruct"
+    p = payload.get("provider") or {}
+    base = (p.get("base_url") or "").rstrip("/")
+    key = p.get("api_key") or os.getenv("NVIDIA_API_KEY", "")
+    model = p.get("model") or "meta/llama-3.1-8b-instruct"
     if not base or not key: raise RuntimeError("Configure an OpenAI-compatible Base URL and API key.")
-    search_cfg = payload.get("search") or {}; search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
-    system = f'''You are Jolgue AI, a normal conversational AI with a real workspace. You can create, edit, read, move, copy, delete, zip/unzip files, execute shell commands inside the workspace, and search the web.
+    search_cfg = payload.get("search") or {}
+    search_provider = search_cfg.get("provider") or os.getenv("SEARCH_PROVIDER", "duckduckgo")
+    system = f'''You are Jolgue AI, an autonomous conversational and coding agent with a real workspace.
+
+You have actual tools, and you should decide yourself when to use them. Do not merely describe what you would do when a tool can do it.
+- Use shell when you need to inspect, run, debug, install, build, test, transform, or otherwise operate on files/programs in the workspace.
+- Use web_search when the user asks for current/external information, a lookup, documentation, prices, news, compatibility, or facts that may have changed.
+- Use file tools when you need to create, edit, read, move, copy, delete, zip, or unzip workspace files.
+- You may chain several tool calls across multiple turns until the task is actually complete.
+- After a tool call, inspect its result and continue working when another tool call is needed. Do not stop just because one tool succeeded.
+- Do not ask the user to run a command that you can run yourself with shell.
+- Do not claim a command, search, file operation, or test happened unless the tool result confirms it.
+
 Available tools:
 - create_file(path,content)
 - write_file(path,content)
@@ -228,9 +249,13 @@ Available tools:
 - unzip_files(archive,output)
 - shell(command) — runs with the workspace as cwd.
 - web_search(query) — searches the public web. Current provider: {search_provider}.
-When using a tool, emit exactly one line: <tool>{{"name":"TOOL_NAME","args":{{...}}}}</tool>
-Use only workspace-relative file paths. Do not put tool markup in normal prose. After tools run, explain the result concisely and include useful filenames/URLs.'''
-    for s in payload.get("skills", []): system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
+
+When using a tool, emit exactly one line per tool call in this format:
+<tool>{{"name":"TOOL_NAME","args":{{...}}}}</tool>
+
+Use only workspace-relative file paths. Tool markup is for execution and must not be used as normal prose. After all needed tools finish, answer the user normally and summarize the actual work/results.'''
+    for s in payload.get("skills", []):
+        system += f"\nSkill: {s.get('name')}\n{s.get('instructions')}\n"
     body = json.dumps({"model": model, "messages": [{"role": "system", "content": system}] + payload.get("messages", []), "temperature": 0.2, "stream": False}).encode("utf-8")
     req = urllib.request.Request(base + "/chat/completions", data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + key}, method="POST")
     response = None
@@ -240,7 +265,9 @@ Use only workspace-relative file paths. Do not put tool markup in normal prose. 
         response = urllib.request.urlopen(req, timeout=180)
         with JOBS_LOCK:
             if job_id in JOBS: JOBS[job_id]["response"] = response
-        if job_cancelled(job_id): response.close(); raise RuntimeError("Generation stopped")
+        if job_cancelled(job_id):
+            response.close()
+            raise RuntimeError("Generation stopped")
         raw = response.read()
         if job_cancelled(job_id): raise RuntimeError("Generation stopped")
         data = json.loads(raw)
@@ -249,7 +276,8 @@ Use only workspace-relative file paths. Do not put tool markup in normal prose. 
         if response is not None:
             try: response.close()
             except Exception: pass
-        with JOBS_LOCK: JOBS.pop(job_id, None)
+        with JOBS_LOCK:
+            if job_id in JOBS: JOBS[job_id]["response"] = None
 
 
 def run_tools(text, search_cfg):
@@ -257,14 +285,46 @@ def run_tools(text, search_cfg):
     for raw in re.findall(r'<tool>\s*(\{.*?\})\s*</tool>', text, re.S):
         call = {}
         try:
-            call = json.loads(raw); name = call["name"]; args = call.get("args", {})
-            if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}: result = file_tool(name, args)
-            elif name == "shell": result = shell_tool(args)
-            elif name == "web_search": result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
-            else: raise ValueError(f"Unknown tool: {name}")
+            call = json.loads(raw)
+            name = call["name"]
+            args = call.get("args", {})
+            if name in {"create_file", "write_file", "read_file", "delete_file", "create_directory", "move_file", "copy_file", "zip_files", "unzip_files"}:
+                result = file_tool(name, args)
+            elif name == "shell":
+                result = shell_tool(args)
+            elif name == "web_search":
+                result = {"ok": True, "query": args.get("query", ""), "results": search_web(args.get("query", ""), search_cfg.get("provider"), search_cfg.get("api_key") or os.getenv("BRAVE_SEARCH_API_KEY", ""))}
+            else:
+                raise ValueError(f"Unknown tool: {name}")
             results.append({"tool": name, **result})
-        except Exception as e: results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(e)})
+        except Exception as e:
+            results.append({"tool": call.get("name", "unknown"), "ok": False, "error": str(e)})
     return re.sub(r'<tool>\s*\{.*?\}\s*</tool>', '', text, flags=re.S).strip(), results
+
+
+def agent_run(payload, job_id):
+    messages = list(payload.get("messages", []))
+    search_cfg = payload.get("search") or {}
+    all_tools = []
+    last_clean = ""
+    for step in range(MAX_AGENT_STEPS):
+        if job_cancelled(job_id): raise RuntimeError("Generation stopped")
+        turn = dict(payload)
+        turn["messages"] = messages
+        content = call_llm(turn, job_id)
+        if job_cancelled(job_id): raise RuntimeError("Generation stopped")
+        clean, tools = run_tools(content, search_cfg)
+        last_clean = clean
+        if not tools:
+            return clean, all_tools, step + 1
+        all_tools.extend(tools)
+        messages.append({"role": "assistant", "content": content})
+        tool_blob = json.dumps(tools, ensure_ascii=False)
+        if len(tool_blob) > 36000:
+            tool_blob = tool_blob[:36000] + "\n[tool output truncated]"
+        messages.append({"role": "user", "content": "Tool results from the previous step. Inspect these results and continue the task if more tool calls are needed.\n" + tool_blob})
+    suffix = "\n\nI reached the maximum agent steps before finishing the task."
+    return (last_clean + suffix).strip(), all_tools, MAX_AGENT_STEPS
 
 
 LOGIN_HTML = '''<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jolgue AI — Entrar</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#212121;color:#eee;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(380px,calc(100% - 32px));background:#171717;border:1px solid #3d3d3d;border-radius:18px;padding:28px;box-sizing:border-box}.logo{width:44px;height:44px;border-radius:12px;background:#fff;color:#111;display:grid;place-items:center;font-weight:800;margin-bottom:18px}.title{font-size:25px;font-weight:650;margin-bottom:6px}.sub{color:#aaa;margin-bottom:22px}.field{width:100%;box-sizing:border-box;padding:12px;border:1px solid #454545;border-radius:10px;background:#212121;color:#eee;margin:7px 0;outline:none}.field:focus{border-color:#777}.btn{width:100%;margin-top:8px;padding:12px;border:0;border-radius:10px;background:#fff;color:#111;font-weight:700;cursor:pointer}.err{min-height:18px;color:#ff7777;margin-top:10px}.hint{margin-top:15px;color:#777;font-size:12px;line-height:1.4}</style></head><body><form class="card" method="post" action="/api/login"><div class="logo">J</div><div class="title">Jolgue AI</div><div class="sub">Inicia sessão no teu workspace privado.</div><input class="field" name="username" autocomplete="username" placeholder="Utilizador" required><input class="field" type="password" name="password" autocomplete="current-password" placeholder="Password" required><button class="btn">Entrar</button><div class="err">{{ERROR}}</div><div class="hint">O workspace, shell e definições do provider ficam protegidos por esta sessão.</div></form></body></html>'''
@@ -329,7 +389,6 @@ class H(BaseHTTPRequestHandler):
             return
         if self.path == "/api/shell":
             try: self.send_json(shell_tool(data))
-            except subprocess.TimeoutExpired: self.send_json({"error": f"Command timed out after {SHELL_TIMEOUT}s"}, 408)
             except Exception as e: self.send_json({"error": str(e)}, 400)
             return
         if self.path == "/api/chat/stop":
@@ -346,15 +405,15 @@ class H(BaseHTTPRequestHandler):
             job_id = str(data.get("job_id") or uuid.uuid4())
             with JOBS_LOCK: JOBS[job_id] = {"cancelled": False, "response": None}
             try:
-                content = call_llm(data, job_id)
-                if job_cancelled(job_id): self.send_json({"stopped": True, "content": "Generation stopped.", "tools": [], "files": list_files()}, 499); return
-                clean, tools = run_tools(content, data.get("search") or {})
-                self.send_json({"content": clean, "tools": tools, "files": list_files(), "job_id": job_id})
+                content, tools, steps = agent_run(data, job_id)
+                self.send_json({"content": content, "tools": tools, "steps": steps, "files": list_files(), "job_id": job_id})
             except RuntimeError as e:
                 if "stopped" in str(e).lower() or job_cancelled(job_id): self.send_json({"stopped": True, "content": "Generation stopped.", "tools": [], "files": list_files()}, 499)
                 else: self.send_json({"error": str(e)}, 500)
             except urllib.error.HTTPError as e: self.send_json({"error": f"Provider HTTP {e.code}: {e.read().decode(errors='ignore')}"}, 502)
             except Exception as e: self.send_json({"error": str(e)}, 500)
+            finally:
+                with JOBS_LOCK: JOBS.pop(job_id, None)
             return
         self.send_json({"error": "Not found"}, 404)
 
